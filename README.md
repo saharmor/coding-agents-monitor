@@ -9,6 +9,7 @@ The widget is intentionally small and always-on-top. It shows the current 5-hour
 - Claude Code and Codex 5-hour/session usage consumed, with relative and clock reset times.
 - Optional 7-day usage consumed and reset times from the calendar button.
 - Green usage bars below 70%, orange from 70% to 89%, and red from 90% upward.
+- Bundled transparent PNG logos from `assets/claude-logo.png` and `assets/codex-logo.png`.
 - Missing or stale state when local usage sources are unavailable.
 
 ## How It Works

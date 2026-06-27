@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UsageCore
 
@@ -116,54 +117,43 @@ private extension UsageProvider {
             return "Codex"
         }
     }
+
+    var logoResourceName: String {
+        switch self {
+        case .claude:
+            return "claude-logo"
+        case .codex:
+            return "codex-logo"
+        }
+    }
+
+    var logoImage: NSImage? {
+        if let namedImage = NSImage(named: logoResourceName) {
+            return namedImage
+        }
+        guard let url = Bundle.main.url(forResource: logoResourceName, withExtension: "png") else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
+    }
 }
 
 private struct ProviderLogo: View {
     var provider: UsageProvider
 
     var body: some View {
-        switch provider {
-        case .claude:
-            ClaudeLogo()
-        case .codex:
-            CodexLogo()
+        if let image = provider.logoImage {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .accessibilityLabel(Text(provider.displayName))
+        } else {
+            Image(systemName: "app.dashed")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(Text(provider.displayName))
         }
-    }
-}
-
-private struct ClaudeLogo: View {
-    var body: some View {
-        ZStack {
-            ForEach(0..<6, id: \.self) { index in
-                Capsule()
-                    .fill(Color(red: 0.82, green: 0.46, blue: 0.24))
-                    .frame(width: 3.2, height: 11)
-                    .offset(y: -3.3)
-                    .rotationEffect(.degrees(Double(index) * 60))
-            }
-            Circle()
-                .fill(Color(red: 0.93, green: 0.72, blue: 0.55))
-                .frame(width: 4, height: 4)
-        }
-        .accessibilityLabel("Claude")
-    }
-}
-
-private struct CodexLogo: View {
-    var body: some View {
-        ZStack {
-            ForEach(0..<6, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 2.2, style: .continuous)
-                    .stroke(Color(red: 0.12, green: 0.54, blue: 0.48), lineWidth: 1.7)
-                    .frame(width: 8.4, height: 4.8)
-                    .offset(x: 3.5)
-                    .rotationEffect(.degrees(Double(index) * 60))
-            }
-            Circle()
-                .fill(Color(red: 0.16, green: 0.72, blue: 0.64))
-                .frame(width: 3.4, height: 3.4)
-        }
-        .accessibilityLabel("Codex")
     }
 }
 

@@ -17,6 +17,8 @@ mkdir -p "$MACOS" "$RESOURCES"
 
 cp "$ROOT/.build/release/$EXECUTABLE_NAME" "$MACOS/$EXECUTABLE_NAME"
 cp "$ROOT/bridge/claude-statusline-bridge.mjs" "$RESOURCES/claude-statusline-bridge.mjs"
+cp "$ROOT/assets/claude-logo.png" "$RESOURCES/claude-logo.png"
+cp "$ROOT/assets/codex-logo.png" "$RESOURCES/codex-logo.png"
 chmod +x "$MACOS/$EXECUTABLE_NAME" "$RESOURCES/claude-statusline-bridge.mjs"
 
 cp "$ROOT/scripts/Info.plist" "$CONTENTS/Info.plist"
