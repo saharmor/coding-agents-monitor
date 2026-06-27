@@ -1,59 +1,77 @@
+<div align="center">
+
 # Coding Agents Monitor
 
-Native macOS floating usage monitor for Claude Code and Codex.
+A tiny always-on-top macOS widget for keeping an eye on Claude Code and Codex usage before you run out mid-flow.
 
-The widget is intentionally small and always-on-top. It shows the current 5-hour/session usage consumed for Claude Code and Codex, with Claude first because it is usually the primary daily driver. A calendar button expands the widget to show the less-important 7-day windows.
+**Privacy Note**: Usage is read from local Codex and Claude Code signals. Prompts, transcripts, OAuth tokens, and raw provider API responses are not stored by the widget.
 
-## What It Shows
+<p>
+<a href="https://www.linkedin.com/in/sahar-mor/" target="_blank"><img src="https://img.shields.io/badge/LinkedIn-Connect-blue" alt="LinkedIn"></a>
+<a href="https://x.com/theaievangelist" target="_blank"><img src="https://img.shields.io/twitter/follow/:theaievangelist" alt="X"></a>
+<a href="http://aitidbits.ai/" target="_blank"><img src="https://github.com/saharmor/saharmor.github.io/blob/main/images/ai%20tidbits%20logo.png?raw=true" alt="Stay updated on AI" width="20" height="20" style="vertical-align: middle;"> Stay updated on AI</a>
+</p>
 
-- Claude Code and Codex 5-hour/session usage consumed, with relative and clock reset times.
-- Optional 7-day usage consumed and reset times from the calendar button.
-- Green usage bars below 70%, orange from 70% to 89%, and red from 90% upward.
-- Bundled transparent PNG logos from `assets/claude-logo.png` and `assets/codex-logo.png`.
-- Missing or stale state when local usage sources are unavailable.
-- A lightweight 30-second UI clock tick for reset countdown labels; provider usage files are still read only when they change.
-- If a reset time passes before a fresh local usage sample arrives, the affected row shows `waiting for update` instead of inventing a new percentage.
+</div>
 
-## How It Works
+## Features
 
-- Codex: watches `~/.codex/sessions/**/rollout-*.jsonl` and parses appended `payload.type == "token_count"` events.
-- Claude Code: installs a status-line bridge at `~/.usage-monitor/claude-statusline-bridge.mjs`, which writes sanitized usage data to `~/.usage-monitor/claude-status.json`.
-- On launch, the app asks the installed bridge to seed Claude usage once from Claude Code's OAuth usage endpoint. The bridge reads Claude Code's macOS Keychain credential first, then falls back to `~/.claude/.credentials.json`.
+- **Claude first**: Claude Code appears first because it is usually the daily driver.
+- **5-hour usage at a glance**: See consumed session usage and the next reset time.
+- **Weekly view on demand**: Click the calendar button to expand the less-important 7-day windows.
+- **Local-first updates**: Codex and Claude usage files are watched locally; the app does not poll providers on a loop.
+- **Lightweight clock tick**: Reset labels update every 30 seconds without rereading token logs.
+- **Honest stale states**: If a reset passes before a fresh local sample arrives, the row shows `waiting for update` instead of inventing a number.
 
-The app stores only percentages, reset timestamps, context token counts, and update times. It does not store prompts, transcript content, OAuth tokens, or raw provider API responses.
+## Quick Start
 
-## Requirements
-
-- macOS 13 or newer.
-- Swift toolchain or Xcode Command Line Tools.
-- Node.js available at `/usr/bin/env node`.
-- Claude Code already logged in with Claude.ai if Claude usage should appear immediately.
-- Codex session logs under `~/.codex/sessions` if Codex usage should appear.
-
-## Build And Launch
-
-```sh
+```bash
+git clone https://github.com/saharmor/Coding-Agents-Monitor.git
+cd Coding-Agents-Monitor
 swift test
 scripts/build_app.sh
 open "outputs/Usage Monitor.app"
 ```
 
-The app stays above other windows, can be dragged around, and remembers its position locally.
+The widget stays above other windows, can be dragged around, and remembers its position locally.
+
+## How It Works
+
+- **Codex**: Watches `~/.codex/sessions/**/rollout-*.jsonl` and parses appended `payload.type == "token_count"` events.
+- **Claude Code**: Installs a status-line bridge at `~/.usage-monitor/claude-statusline-bridge.mjs`, which writes sanitized usage data to `~/.usage-monitor/claude-status.json`.
+- **Startup seed**: On launch, the app asks the bridge to seed Claude usage once from Claude Code's OAuth usage endpoint. After that, it relies on local file changes.
+- **No transcript storage**: The app stores only usage percentages, reset timestamps, context token counts, and update times.
+
+## Requirements
+
+- macOS 13 or newer
+- Swift toolchain or Xcode Command Line Tools
+- Node.js available at `/usr/bin/env node`
+- Claude Code already logged in with Claude.ai if Claude usage should appear immediately
+- Codex session logs under `~/.codex/sessions` if Codex usage should appear
 
 ## Install Claude Bridge Only
 
 The app installs or updates the Claude Code bridge on launch. To install it without opening the widget:
 
-```sh
+```bash
 scripts/build_app.sh
 "outputs/Usage Monitor.app/Contents/MacOS/UsageMonitor" --install-bridge-only
 ```
 
 The installer updates `~/.claude/settings.json` and backs up any previous settings file before changing it. If a previous Claude Code `statusLine.command` exists, the bridge wraps and preserves it.
 
+## Development Checks
+
+```bash
+swift test
+node --check bridge/claude-statusline-bridge.mjs
+bash -n scripts/build_app.sh
+```
+
 ## Coding Agent Prompt
 
-Use this prompt with a coding agent to install the monitor end-to-end on a Mac without extra back-and-forth:
+Copy-paste this prompt into Claude Code, Codex, Cursor, or any coding agent to install the monitor end-to-end on a Mac:
 
 ```text
 You are installing Coding Agents Monitor from a freshly cloned repository on macOS.
@@ -78,10 +96,6 @@ Safety rules:
 - If Claude usage is unavailable, verify Codex still works and report that Claude Code must be logged in with Claude.ai.
 ```
 
-## Development Checks
+## Connect
 
-```sh
-swift test
-node --check bridge/claude-statusline-bridge.mjs
-bash -n scripts/build_app.sh
-```
+Built by [Sahar Mor](https://www.linkedin.com/in/sahar-mor/) • Follow [@theaievangelist](https://x.com/theaievangelist) • [Stay updated on AI](http://aitidbits.ai/)
