@@ -7,11 +7,17 @@ final class CodexUsageCollector: @unchecked Sendable {
     private let onSnapshot: (UsageSnapshot) -> Void
     private var offsets: [URL: UInt64] = [:]
     private var watcher: FSEventWatcher?
+    private var pollTimer: DispatchSourceTimer?
     private var scanScheduled = false
+    private var lastEmittedAt: Date?
 
     init(root: URL, onSnapshot: @escaping (UsageSnapshot) -> Void) {
         self.root = root
         self.onSnapshot = onSnapshot
+    }
+
+    deinit {
+        pollTimer?.cancel()
     }
 
     func start() {
@@ -23,6 +29,7 @@ final class CodexUsageCollector: @unchecked Sendable {
                 }
                 self.watcher?.start()
             }
+            self.startPollTimer()
         }
     }
 
@@ -37,11 +44,20 @@ final class CodexUsageCollector: @unchecked Sendable {
             }
             offsets[file] = fileSize(file)
         }
-        if let latest {
-            DispatchQueue.main.async {
-                self.onSnapshot(latest)
+        emitIfNewer(latest)
+    }
+
+    private func startPollTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 15, repeating: 15, leeway: .seconds(3))
+        timer.setEventHandler { [weak self] in
+            guard let self else {
+                return
             }
+            self.scanIncremental(files: Array(self.codexFiles().prefix(30)))
         }
+        pollTimer = timer
+        timer.resume()
     }
 
     private func scheduleIncrementalScan() {
@@ -59,6 +75,7 @@ final class CodexUsageCollector: @unchecked Sendable {
     }
 
     private func scanIncremental(files: [URL]) {
+        var latest: UsageSnapshot?
         for file in files {
             let size = fileSize(file)
             let offset = offsets[file] ?? 0
@@ -66,9 +83,7 @@ final class CodexUsageCollector: @unchecked Sendable {
 
             if offset == 0 || size < offset {
                 if let snapshot = latestTokenCount(in: file) {
-                    DispatchQueue.main.async {
-                        self.onSnapshot(snapshot)
-                    }
+                    latest = newer(snapshot, than: latest)
                 }
                 continue
             }
@@ -79,11 +94,30 @@ final class CodexUsageCollector: @unchecked Sendable {
             let text = String(decoding: data, as: UTF8.self)
             for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
                 if let snapshot = CodexTokenCountParser.parseLine(String(line)) {
-                    DispatchQueue.main.async {
-                        self.onSnapshot(snapshot)
-                    }
+                    latest = newer(snapshot, than: latest)
                 }
             }
+        }
+        emitIfNewer(latest)
+    }
+
+    private func newer(_ snapshot: UsageSnapshot, than existing: UsageSnapshot?) -> UsageSnapshot {
+        guard let existing else {
+            return snapshot
+        }
+        return snapshot.updatedAt >= existing.updatedAt ? snapshot : existing
+    }
+
+    private func emitIfNewer(_ snapshot: UsageSnapshot?) {
+        guard let snapshot else {
+            return
+        }
+        if let lastEmittedAt, snapshot.updatedAt < lastEmittedAt {
+            return
+        }
+        lastEmittedAt = snapshot.updatedAt
+        DispatchQueue.main.async {
+            self.onSnapshot(snapshot)
         }
     }
 

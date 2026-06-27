@@ -21,6 +21,8 @@ A tiny always-on-top macOS widget for keeping an eye on Claude Code and Codex us
 - **Weekly view on demand**: Click the calendar button to expand the less-important 7-day windows.
 - **Local-first updates**: Codex and Claude usage files are watched locally; the app does not poll providers on a loop.
 - **Claude cache fallback**: The tiny Claude cache file is checked every 15 seconds, and only parsed if its size or modified time changed.
+- **Actual Claude refresh**: Claude usage is refreshed through the installed bridge once per minute so the widget matches Claude Code's Account & Usage panel.
+- **Codex missed-event recovery**: Recent Codex rollout files are checked every 15 seconds, and only appended bytes are parsed when file sizes changed.
 - **Lightweight clock tick**: Reset labels update every 30 seconds without rereading token logs.
 - **Launches at login**: The app registers a small LaunchAgent so the widget comes back after restart/login.
 - **Honest stale states**: If a reset passes before a fresh local sample arrives, the row shows `waiting for update` instead of inventing a number.
@@ -42,8 +44,8 @@ When launched from the `.app`, it also registers itself to open at login.
 
 - **Codex**: Watches `~/.codex/sessions/**/rollout-*.jsonl` and parses appended `payload.type == "token_count"` events.
 - **Claude Code**: Installs a status-line bridge at `~/.usage-monitor/claude-statusline-bridge.mjs`, which writes sanitized usage data to `~/.usage-monitor/claude-status.json`.
-- **Startup seed**: On launch, the app asks the bridge to seed Claude usage once from Claude Code's OAuth usage endpoint. After that, it relies on local file changes.
-- **Missed-event recovery**: If macOS drops a directory change event, the widget catches up from the local Claude cache on the next 15-second check.
+- **Actual usage refresh**: On launch and then once per minute, the app asks the bridge to refresh Claude usage from Claude Code's OAuth usage endpoint.
+- **Missed-event recovery**: If macOS drops a directory change event, the widget catches up from recent Codex file appends or the local Claude cache on the next 15-second check.
 - **No transcript storage**: The app stores only usage percentages, reset timestamps, context token counts, and update times.
 
 ## Requirements

@@ -9,6 +9,7 @@ final class UsageStore: ObservableObject {
 
     private var codexCollector: CodexUsageCollector?
     private var claudeCollector: ClaudeUsageCollector?
+    private let claudeUsageRefresher = ClaudeUsageRefresher()
 
     func start() {
         installClaudeBridge()
@@ -58,6 +59,7 @@ final class UsageStore: ObservableObject {
                 Self.refreshClaudeUsage(bridgePath: result.bridgePath)
                 let message = result.changedSettings ? "Claude bridge installed" : "Claude bridge already installed"
                 Task { @MainActor [weak self] in
+                    self?.claudeUsageRefresher.start(bridgePath: result.bridgePath)
                     self?.setupMessage = message
                 }
             } catch {
@@ -104,5 +106,42 @@ final class UsageStore: ObservableObject {
             return candidate
         }
         throw ClaudeBridgeInstallError.missingBridgeSource("claude-statusline-bridge.mjs")
+    }
+}
+
+private final class ClaudeUsageRefresher: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "usage-monitor.claude-oauth-refresh", qos: .utility)
+    private var timer: DispatchSourceTimer?
+
+    deinit {
+        timer?.cancel()
+    }
+
+    func start(bridgePath: String) {
+        queue.async {
+            self.timer?.cancel()
+
+            let timer = DispatchSource.makeTimerSource(queue: self.queue)
+            timer.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(10))
+            timer.setEventHandler {
+                Self.refreshClaudeUsage(bridgePath: bridgePath)
+            }
+            self.timer = timer
+            timer.resume()
+        }
+    }
+
+    private static func refreshClaudeUsage(bridgePath: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["node", bridgePath, "--refresh-only"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // The collector will continue to show the last cached Claude value, if any.
+        }
     }
 }
