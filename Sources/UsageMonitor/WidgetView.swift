@@ -42,11 +42,11 @@ struct WidgetView: View {
                 .foregroundStyle(.secondary)
             }
 
-            ProviderView(title: "Claude", snapshot: store.claude, showsWeekly: showsWeekly)
-            ProviderView(title: "Codex", snapshot: store.codex, showsWeekly: showsWeekly)
+            ProviderView(provider: .claude, snapshot: store.claude, showsWeekly: showsWeekly)
+            ProviderView(provider: .codex, snapshot: store.codex, showsWeekly: showsWeekly)
         }
         .padding(10)
-        .frame(width: 238)
+        .frame(width: 220)
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: showsWeekly) { value in
             NotificationCenter.default.post(
@@ -66,29 +66,25 @@ struct WidgetView: View {
 }
 
 private struct ProviderView: View {
-    var title: String
+    var provider: UsageProvider
     var snapshot: UsageSnapshot?
     var showsWeekly: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 5, height: 5)
-                Text(title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 44, alignment: .leading)
+            HStack(spacing: 7) {
+                ProviderLogo(provider: provider)
+                    .frame(width: 16, height: 16)
+                    .opacity(snapshot == nil ? 0.55 : 1)
+                    .help(provider.displayName)
 
                 UsageMeter(label: "5h", window: snapshot?.fiveHour, emptyText: statusText)
             }
 
             if showsWeekly {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     Color.clear
-                        .frame(width: 5, height: 5)
-                    Text("")
-                        .frame(width: 44)
+                        .frame(width: 16, height: 16)
 
                     UsageMeter(label: "7d", window: snapshot?.sevenDay, emptyText: statusText)
                 }
@@ -109,12 +105,65 @@ private struct ProviderView: View {
         }
         return "\(Int(age / 60))m ago"
     }
+}
 
-    private var statusColor: Color {
-        guard let snapshot else {
-            return .orange
+private extension UsageProvider {
+    var displayName: String {
+        switch self {
+        case .claude:
+            return "Claude"
+        case .codex:
+            return "Codex"
         }
-        return Date().timeIntervalSince(snapshot.updatedAt) > 600 ? .orange : .green
+    }
+}
+
+private struct ProviderLogo: View {
+    var provider: UsageProvider
+
+    var body: some View {
+        switch provider {
+        case .claude:
+            ClaudeLogo()
+        case .codex:
+            CodexLogo()
+        }
+    }
+}
+
+private struct ClaudeLogo: View {
+    var body: some View {
+        ZStack {
+            ForEach(0..<6, id: \.self) { index in
+                Capsule()
+                    .fill(Color(red: 0.82, green: 0.46, blue: 0.24))
+                    .frame(width: 3.2, height: 11)
+                    .offset(y: -3.3)
+                    .rotationEffect(.degrees(Double(index) * 60))
+            }
+            Circle()
+                .fill(Color(red: 0.93, green: 0.72, blue: 0.55))
+                .frame(width: 4, height: 4)
+        }
+        .accessibilityLabel("Claude")
+    }
+}
+
+private struct CodexLogo: View {
+    var body: some View {
+        ZStack {
+            ForEach(0..<6, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 2.2, style: .continuous)
+                    .stroke(Color(red: 0.12, green: 0.54, blue: 0.48), lineWidth: 1.7)
+                    .frame(width: 8.4, height: 4.8)
+                    .offset(x: 3.5)
+                    .rotationEffect(.degrees(Double(index) * 60))
+            }
+            Circle()
+                .fill(Color(red: 0.16, green: 0.72, blue: 0.64))
+                .frame(width: 3.4, height: 3.4)
+        }
+        .accessibilityLabel("Codex")
     }
 }
 
@@ -165,7 +214,7 @@ private struct UsageMeter: View {
         guard let date = window?.resetsAt else {
             return "reset unknown"
         }
-        return "resets \(ResetFormatter.shared.string(from: date))"
+        return ResetFormatter.shared.string(from: date)
     }
 
     private var color: Color {
@@ -189,20 +238,42 @@ private final class ResetFormatter {
     private let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .none
-        formatter.timeStyle = .short
+        formatter.dateFormat = "h:mma"
         return formatter
     }()
 
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "EEE HH:mm"
+        formatter.dateFormat = "EEE h:mma"
         return formatter
     }()
 
     func string(from date: Date) -> String {
-        if abs(date.timeIntervalSinceNow) < 24 * 60 * 60 {
-            return timeFormatter.string(from: date)
+        let seconds = date.timeIntervalSinceNow
+        let relative: String
+
+        if seconds <= 0 {
+            relative = "now"
+        } else if seconds < 60 * 60 {
+            let minutes = max(1, min(59, Int(ceil(seconds / 60))))
+            relative = minutes == 1 ? "1 min" : "\(minutes) mins"
+        } else {
+            relative = "\(max(1, Int(seconds / (60 * 60))))h"
         }
-        return dateFormatter.string(from: date)
+
+        return "resets in \(relative) (\(clockString(from: date)))"
+    }
+
+    private func clockString(from date: Date) -> String {
+        if Calendar.current.isDateInToday(date) {
+            return normalizedClock(timeFormatter.string(from: date))
+        }
+        return normalizedClock(dateFormatter.string(from: date))
+    }
+
+    private func normalizedClock(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "AM", with: "am")
+            .replacingOccurrences(of: "PM", with: "pm")
     }
 }

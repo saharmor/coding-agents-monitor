@@ -6,7 +6,7 @@ The widget is intentionally small and always-on-top. It shows the current 5-hour
 
 ## What It Shows
 
-- Claude Code and Codex 5-hour/session usage consumed and reset times.
+- Claude Code and Codex 5-hour/session usage consumed, with relative and clock reset times.
 - Optional 7-day usage consumed and reset times from the calendar button.
 - Green usage bars below 70%, orange from 70% to 89%, and red from 90% upward.
 - Missing or stale state when local usage sources are unavailable.
@@ -65,7 +65,7 @@ Steps:
 5. Run `scripts/build_app.sh`.
 6. Run `"outputs/Usage Monitor.app/Contents/MacOS/UsageMonitor" --install-bridge-only` to install or update the Claude Code status-line bridge. This may write `~/.usage-monitor/claude-statusline-bridge.mjs`, `~/.usage-monitor/claude-status.json`, and `~/.claude/settings.json`; preserve backups created by the installer.
 7. Launch the widget with `open "outputs/Usage Monitor.app"`.
-8. Verify the app is running. If you have GUI inspection available, confirm the compact widget shows Claude above Codex and displays consumed 5-hour usage percentages. If GUI inspection is not available, confirm a `UsageMonitor` process is running and `~/.usage-monitor/claude-status.json` exists when Claude Code credentials are available.
+8. Verify the app is running. If you have GUI inspection available, confirm the compact widget shows Claude above Codex, uses provider logos instead of row names, and displays consumed 5-hour usage percentages with `resets in ... (...)` copy. If GUI inspection is not available, confirm a `UsageMonitor` process is running and `~/.usage-monitor/claude-status.json` exists when Claude Code credentials are available.
 9. Leave the widget running in compact mode. Summarize the installed bridge path, app path, and verification results.
 
 Safety rules:

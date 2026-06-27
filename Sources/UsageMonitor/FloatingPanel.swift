@@ -9,8 +9,8 @@ extension Notification.Name {
 final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let window: NSPanel
     private let defaultsKey = "floatingPanelFrame"
-    private let compactSize = NSSize(width: 238, height: 112)
-    private let weeklySize = NSSize(width: 238, height: 170)
+    private let compactSize = NSSize(width: 220, height: 112)
+    private let weeklySize = NSSize(width: 220, height: 158)
 
     init(contentView: WidgetView) {
         let defaultFrame = NSRect(x: 80, y: 620, width: compactSize.width, height: compactSize.height)
