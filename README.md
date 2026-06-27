@@ -21,6 +21,7 @@ A tiny always-on-top macOS widget for keeping an eye on Claude Code and Codex us
 - **Weekly view on demand**: Click the calendar button to expand the less-important 7-day windows.
 - **Local-first updates**: Codex and Claude usage files are watched locally; the app does not poll providers on a loop.
 - **Lightweight clock tick**: Reset labels update every 30 seconds without rereading token logs.
+- **Launches at login**: The app registers a small LaunchAgent so the widget comes back after restart/login.
 - **Honest stale states**: If a reset passes before a fresh local sample arrives, the row shows `waiting for update` instead of inventing a number.
 
 ## Quick Start
@@ -34,6 +35,7 @@ open "outputs/Usage Monitor.app"
 ```
 
 The widget stays above other windows, can be dragged around, and remembers its position locally.
+When launched from the `.app`, it also registers itself to open at login.
 
 ## How It Works
 

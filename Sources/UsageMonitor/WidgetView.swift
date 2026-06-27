@@ -63,10 +63,13 @@ struct WidgetView: View {
         .onReceive(clockTimer) { value in
             now = value
         }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.white.opacity(0.16), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 12)

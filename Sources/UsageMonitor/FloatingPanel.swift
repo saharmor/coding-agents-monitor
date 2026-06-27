@@ -11,6 +11,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let defaultsKey = "floatingPanelFrame"
     private let compactSize = NSSize(width: 220, height: 112)
     private let weeklySize = NSSize(width: 220, height: 158)
+    private let cornerRadius: CGFloat = 12
 
     init(contentView: WidgetView) {
         let defaultFrame = NSRect(x: 80, y: 620, width: compactSize.width, height: compactSize.height)
@@ -22,11 +23,16 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         )
         super.init()
 
+        let hostingView = NSHostingView(rootView: contentView)
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = cornerRadius
+        hostingView.layer?.masksToBounds = true
+
         window.delegate = self
-        window.contentView = NSHostingView(rootView: contentView)
+        window.contentView = hostingView
         window.backgroundColor = .clear
         window.isOpaque = false
-        window.hasShadow = false
+        window.hasShadow = true
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isMovableByWindowBackground = true

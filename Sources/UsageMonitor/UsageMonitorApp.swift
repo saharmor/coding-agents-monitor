@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSApp.setActivationPolicy(.accessory)
+        LoginItemInstaller.installForCurrentApp()
         store.start()
 
         let panel = FloatingPanelController(contentView: WidgetView(store: store))
