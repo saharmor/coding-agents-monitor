@@ -261,10 +261,20 @@ private struct CollapsedProviderView: View {
             ProviderLogo(provider: provider)
                 .frame(width: 12, height: 12)
                 .opacity(snapshot == nil ? 0.55 : 1)
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 5, height: 5)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.85), lineWidth: 0.7)
+                        )
+                        .offset(x: 1.5, y: 1)
+                }
 
             Text(usedText)
                 .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(color)
+                .foregroundStyle(textColor)
                 .monospacedDigit()
                 .frame(minWidth: 18, alignment: .leading)
         }
@@ -299,9 +309,16 @@ private struct CollapsedProviderView: View {
         return snapshotUpdatedAt < resetsAt
     }
 
-    private var color: Color {
+    private var textColor: Color {
         guard let used = displayedUsedPercent else {
             return .secondary
+        }
+        return used >= 70 ? statusColor : .primary
+    }
+
+    private var statusColor: Color {
+        guard let used = displayedUsedPercent else {
+            return .gray
         }
         if used >= 90 {
             return .red
@@ -309,7 +326,7 @@ private struct CollapsedProviderView: View {
         if used >= 70 {
             return .orange
         }
-        return .primary
+        return .green
     }
 }
 
