@@ -5,12 +5,53 @@ import UsageCore
 
 struct WidgetView: View {
     @ObservedObject var store: UsageStore
+    @AppStorage("usageWidgetCollapsed") private var isCollapsed = false
     @State private var showsWeekly = false
     @State private var now = Date()
 
     private let clockTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        Group {
+            if isCollapsed {
+                collapsedBody
+            } else {
+                expandedBody
+            }
+        }
+        .padding(isCollapsed ? 7 : 10)
+        .frame(width: isCollapsed ? 118 : 220)
+        .fixedSize(horizontal: false, vertical: true)
+        .onChange(of: isCollapsed) { value in
+            NotificationCenter.default.post(
+                name: .usageMonitorCollapsedChanged,
+                object: nil,
+                userInfo: ["isCollapsed": value]
+            )
+        }
+        .onChange(of: showsWeekly) { value in
+            NotificationCenter.default.post(
+                name: .usageMonitorWeeklyVisibilityChanged,
+                object: nil,
+                userInfo: ["showsWeekly": value]
+            )
+        }
+        .onReceive(clockTimer) { value in
+            now = value
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 12)
+    }
+
+    private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text("Usage")
@@ -24,6 +65,18 @@ struct WidgetView: View {
                 }
 
                 Spacer()
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        isCollapsed = true
+                    }
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Minimize widget")
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.16)) {
@@ -50,29 +103,32 @@ struct WidgetView: View {
             ProviderView(provider: .claude, snapshot: store.claude, showsWeekly: showsWeekly, now: now)
             ProviderView(provider: .codex, snapshot: store.codex, showsWeekly: showsWeekly, now: now)
         }
-        .padding(10)
-        .frame(width: 220)
-        .fixedSize(horizontal: false, vertical: true)
-        .onChange(of: showsWeekly) { value in
-            NotificationCenter.default.post(
-                name: .usageMonitorWeeklyVisibilityChanged,
-                object: nil,
-                userInfo: ["showsWeekly": value]
-            )
+    }
+
+    private var collapsedBody: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                isCollapsed = false
+            }
+        } label: {
+            HStack(spacing: 7) {
+                CollapsedProviderView(provider: .claude, snapshot: store.claude, now: now)
+
+                Capsule()
+                    .fill(Color.white.opacity(0.16))
+                    .frame(width: 1, height: 14)
+
+                CollapsedProviderView(provider: .codex, snapshot: store.codex, now: now)
+
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 10)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .onReceive(clockTimer) { value in
-            now = value
-        }
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.ultraThinMaterial)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.16), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 12)
+        .buttonStyle(.plain)
+        .help("Expand usage")
     }
 }
 
@@ -192,6 +248,68 @@ private struct ProviderLogo: View {
                 .foregroundStyle(.secondary)
                 .accessibilityLabel(Text(provider.displayName))
         }
+    }
+}
+
+private struct CollapsedProviderView: View {
+    var provider: UsageProvider
+    var snapshot: UsageSnapshot?
+    var now: Date
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ProviderLogo(provider: provider)
+                .frame(width: 12, height: 12)
+                .opacity(snapshot == nil ? 0.55 : 1)
+
+            Text(usedText)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(color)
+                .monospacedDigit()
+                .frame(minWidth: 18, alignment: .leading)
+        }
+        .help("\(provider.displayName) 5-hour usage")
+    }
+
+    private var usedText: String {
+        guard let used = displayedUsedPercent else {
+            return "--"
+        }
+        return "\(Int(round(used)))"
+    }
+
+    private var displayedUsedPercent: Double? {
+        guard
+            let window = snapshot?.fiveHour,
+            !needsFreshSample(window: window)
+        else {
+            return nil
+        }
+        return window.usedPercent
+    }
+
+    private func needsFreshSample(window: LimitWindow) -> Bool {
+        guard
+            let resetsAt = window.resetsAt,
+            let snapshotUpdatedAt = snapshot?.updatedAt,
+            resetsAt <= now
+        else {
+            return false
+        }
+        return snapshotUpdatedAt < resetsAt
+    }
+
+    private var color: Color {
+        guard let used = displayedUsedPercent else {
+            return .secondary
+        }
+        if used >= 90 {
+            return .red
+        }
+        if used >= 70 {
+            return .orange
+        }
+        return .primary
     }
 }
 
