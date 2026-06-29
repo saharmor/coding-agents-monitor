@@ -73,9 +73,12 @@ struct WidgetView: View {
                 } label: {
                     Image(systemName: "minus")
                         .font(.system(size: 11, weight: .bold))
+                        .frame(width: 24, height: 22)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel("Minimize")
                 .help("Minimize widget")
 
                 Button {
