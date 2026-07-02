@@ -67,6 +67,19 @@ struct WidgetView: View {
                 Spacer()
 
                 Button {
+                    NotificationCenter.default.post(name: .usageMonitorSnoozeRequested, object: nil)
+                } label: {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 24, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Hide for one hour")
+                .help("Hide widget for 1 hour")
+
+                Button {
                     withAnimation(.easeInOut(duration: 0.16)) {
                         isCollapsed = true
                     }

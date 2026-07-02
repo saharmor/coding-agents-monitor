@@ -4,6 +4,7 @@ import SwiftUI
 extension Notification.Name {
     static let usageMonitorWeeklyVisibilityChanged = Notification.Name("usageMonitorWeeklyVisibilityChanged")
     static let usageMonitorCollapsedChanged = Notification.Name("usageMonitorCollapsedChanged")
+    static let usageMonitorSnoozeRequested = Notification.Name("usageMonitorSnoozeRequested")
 }
 
 @MainActor
@@ -11,12 +12,15 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let window: NSPanel
     private let defaultsKey = "floatingPanelFrame"
     private let collapsedDefaultsKey = "usageWidgetCollapsed"
+    private let snoozeUntilDefaultsKey = "usageWidgetSnoozeUntil"
     private let collapsedSize = NSSize(width: 160, height: 42)
     private let compactSize = NSSize(width: 220, height: 112)
     private let weeklySize = NSSize(width: 220, height: 158)
     private let cornerRadius: CGFloat = 12
+    private let snoozeDuration: TimeInterval = 60 * 60
     private var isCollapsed: Bool
     private var showsWeekly = false
+    private var snoozeTimer: Timer?
 
     init(contentView: WidgetView) {
         isCollapsed = UserDefaults.standard.bool(forKey: collapsedDefaultsKey)
@@ -71,9 +75,18 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             name: .usageMonitorCollapsedChanged,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(snoozeRequested),
+            name: .usageMonitorSnoozeRequested,
+            object: nil
+        )
     }
 
     func show() {
+        if scheduleActiveSnoozeIfNeeded() {
+            return
+        }
         window.orderFrontRegardless()
     }
 
@@ -92,6 +105,13 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     @objc private func collapsedChanged(_ notification: Notification) {
         isCollapsed = notification.userInfo?["isCollapsed"] as? Bool ?? false
         setPanelSize(sizeForCurrentState())
+    }
+
+    @objc private func snoozeRequested() {
+        let until = Date().addingTimeInterval(snoozeDuration)
+        UserDefaults.standard.set(until.timeIntervalSince1970, forKey: snoozeUntilDefaultsKey)
+        window.orderOut(nil)
+        scheduleSnoozeTimer(until: until)
     }
 
     private func sizeForCurrentState() -> NSSize {
@@ -114,7 +134,51 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         UserDefaults.standard.set(NSStringFromRect(resizedFrame), forKey: defaultsKey)
     }
 
+    private func scheduleActiveSnoozeIfNeeded() -> Bool {
+        guard let until = activeSnoozeUntil() else {
+            return false
+        }
+        scheduleSnoozeTimer(until: until)
+        return true
+    }
+
+    private func activeSnoozeUntil() -> Date? {
+        let timestamp = UserDefaults.standard.double(forKey: snoozeUntilDefaultsKey)
+        guard timestamp > 0 else {
+            return nil
+        }
+
+        let until = Date(timeIntervalSince1970: timestamp)
+        if until > Date() {
+            return until
+        }
+
+        UserDefaults.standard.removeObject(forKey: snoozeUntilDefaultsKey)
+        return nil
+    }
+
+    private func scheduleSnoozeTimer(until: Date) {
+        snoozeTimer?.invalidate()
+        let timer = Timer(fire: until, interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.finishSnooze()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        snoozeTimer = timer
+    }
+
+    private func finishSnooze() {
+        snoozeTimer?.invalidate()
+        snoozeTimer = nil
+        UserDefaults.standard.removeObject(forKey: snoozeUntilDefaultsKey)
+        window.orderFrontRegardless()
+    }
+
     deinit {
+        MainActor.assumeIsolated {
+            snoozeTimer?.invalidate()
+        }
         NotificationCenter.default.removeObserver(self)
     }
 }
