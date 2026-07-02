@@ -20,7 +20,7 @@ struct WidgetView: View {
             }
         }
         .padding(isCollapsed ? 7 : 10)
-        .frame(width: isCollapsed ? 160 : 220)
+        .frame(width: isCollapsed ? 152 : 220)
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: isCollapsed) { value in
             NotificationCenter.default.post(
@@ -260,7 +260,7 @@ private struct CollapsedProviderView: View {
     var now: Date
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             ProviderLogo(provider: provider)
                 .frame(width: 13, height: 13)
                 .opacity(snapshot == nil ? 0.55 : 1)
@@ -279,7 +279,7 @@ private struct CollapsedProviderView: View {
                 .font(.system(size: 9, weight: .bold, design: .rounded))
                 .foregroundStyle(textColor)
                 .monospacedDigit()
-                .frame(width: 20, alignment: .leading)
+                .frame(width: usedTextWidth, alignment: .leading)
 
             if let resetText {
                 Text(resetText)
@@ -289,7 +289,7 @@ private struct CollapsedProviderView: View {
                     .frame(width: 16, alignment: .leading)
             }
         }
-        .frame(width: 58, alignment: .leading)
+        .frame(width: 54, alignment: .leading)
         .help("\(provider.displayName) 5-hour usage")
     }
 
@@ -298,6 +298,13 @@ private struct CollapsedProviderView: View {
             return "--"
         }
         return "\(Int(round(used)))"
+    }
+
+    private var usedTextWidth: CGFloat {
+        if displayedUsedPercent == nil {
+            return 16
+        }
+        return usedText.count <= 1 ? 10 : 18
     }
 
     private var displayedUsedPercent: Double? {
