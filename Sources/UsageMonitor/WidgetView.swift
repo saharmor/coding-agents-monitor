@@ -333,7 +333,7 @@ private struct CollapsedProviderView: View {
             let minutes = max(1, min(59, Int(ceil(seconds / 60))))
             return "\(minutes)m"
         }
-        return "\(max(1, Int(seconds / (60 * 60))))h"
+        return "\(max(1, Int(ceil(seconds / (60 * 60)))))h"
     }
 
     private func needsFreshSample(window: LimitWindow) -> Bool {
@@ -482,7 +482,7 @@ private final class ResetFormatter {
             let minutes = max(1, min(59, Int(ceil(seconds / 60))))
             relative = minutes == 1 ? "1 min" : "\(minutes) mins"
         } else {
-            relative = "\(max(1, Int(seconds / (60 * 60))))h"
+            relative = "\(max(1, Int(ceil(seconds / (60 * 60)))))h"
         }
 
         return "resets in \(relative) (\(clockString(from: date, now: now)))"
