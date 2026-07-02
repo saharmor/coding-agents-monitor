@@ -20,7 +20,7 @@ struct WidgetView: View {
             }
         }
         .padding(isCollapsed ? 7 : 10)
-        .frame(width: isCollapsed ? 136 : 220)
+        .frame(width: isCollapsed ? 160 : 220)
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: isCollapsed) { value in
             NotificationCenter.default.post(
@@ -114,7 +114,7 @@ struct WidgetView: View {
                 isCollapsed = false
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 CollapsedProviderView(provider: .claude, snapshot: store.claude, now: now)
 
                 Capsule()
@@ -260,9 +260,9 @@ private struct CollapsedProviderView: View {
     var now: Date
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 4) {
             ProviderLogo(provider: provider)
-                .frame(width: 12, height: 12)
+                .frame(width: 13, height: 13)
                 .opacity(snapshot == nil ? 0.55 : 1)
                 .overlay(alignment: .bottomTrailing) {
                     Circle()
@@ -279,17 +279,17 @@ private struct CollapsedProviderView: View {
                 .font(.system(size: 9, weight: .bold, design: .rounded))
                 .foregroundStyle(textColor)
                 .monospacedDigit()
-                .frame(minWidth: 18, alignment: .leading)
+                .frame(width: 20, alignment: .leading)
 
             if let resetText {
                 Text(resetText)
                     .font(.system(size: 7, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                    .frame(width: 14, alignment: .leading)
+                    .frame(width: 16, alignment: .leading)
             }
         }
-        .frame(width: 48, alignment: .leading)
+        .frame(width: 58, alignment: .leading)
         .help("\(provider.displayName) 5-hour usage")
     }
 
