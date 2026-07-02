@@ -11,7 +11,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let window: NSPanel
     private let defaultsKey = "floatingPanelFrame"
     private let collapsedDefaultsKey = "usageWidgetCollapsed"
-    private let collapsedSize = NSSize(width: 118, height: 46)
+    private let collapsedSize = NSSize(width: 136, height: 42)
     private let compactSize = NSSize(width: 220, height: 112)
     private let weeklySize = NSSize(width: 220, height: 158)
     private let cornerRadius: CGFloat = 12

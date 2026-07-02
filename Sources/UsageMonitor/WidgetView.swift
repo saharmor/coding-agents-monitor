@@ -20,7 +20,7 @@ struct WidgetView: View {
             }
         }
         .padding(isCollapsed ? 7 : 10)
-        .frame(width: isCollapsed ? 118 : 220)
+        .frame(width: isCollapsed ? 136 : 220)
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: isCollapsed) { value in
             NotificationCenter.default.post(
@@ -114,7 +114,7 @@ struct WidgetView: View {
                 isCollapsed = false
             }
         } label: {
-            HStack(spacing: 7) {
+            HStack(spacing: 4) {
                 CollapsedProviderView(provider: .claude, snapshot: store.claude, now: now)
 
                 Capsule()
@@ -260,41 +260,36 @@ private struct CollapsedProviderView: View {
     var now: Date
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 3) {
-                ProviderLogo(provider: provider)
-                    .frame(width: 12, height: 12)
-                    .opacity(snapshot == nil ? 0.55 : 1)
-                    .overlay(alignment: .bottomTrailing) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 5, height: 5)
-                            .overlay(
-                                Circle()
-                                    .stroke(Color.white.opacity(0.85), lineWidth: 0.7)
-                            )
-                            .offset(x: 1.5, y: 1)
-                    }
+        HStack(spacing: 2) {
+            ProviderLogo(provider: provider)
+                .frame(width: 12, height: 12)
+                .opacity(snapshot == nil ? 0.55 : 1)
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 5, height: 5)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.85), lineWidth: 0.7)
+                        )
+                        .offset(x: 1.5, y: 1)
+                }
 
-                Text(usedText)
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                    .foregroundStyle(textColor)
-                    .monospacedDigit()
-                    .frame(minWidth: 18, alignment: .leading)
-            }
+            Text(usedText)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(textColor)
+                .monospacedDigit()
+                .frame(minWidth: 18, alignment: .leading)
 
             if let resetText {
                 Text(resetText)
                     .font(.system(size: 7, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                    .padding(.leading, 15)
-            } else {
-                Color.clear
-                    .frame(height: 8)
+                    .frame(width: 14, alignment: .leading)
             }
         }
-        .frame(width: 36, alignment: .leading)
+        .frame(width: 48, alignment: .leading)
         .help("\(provider.displayName) 5-hour usage")
     }
 
