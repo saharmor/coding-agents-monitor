@@ -1,6 +1,7 @@
 <div align="center">
 
 # Coding Agents Monitor
+<img width="190" height="74" alt="image" src="https://github.com/user-attachments/assets/37af4392-b4a3-48f6-94b6-bac5f26ca5c4" />
 
 A tiny always-on-top macOS widget for keeping an eye on Claude Code and Codex usage before you run out mid-flow.
 
