@@ -260,27 +260,41 @@ private struct CollapsedProviderView: View {
     var now: Date
 
     var body: some View {
-        HStack(spacing: 3) {
-            ProviderLogo(provider: provider)
-                .frame(width: 12, height: 12)
-                .opacity(snapshot == nil ? 0.55 : 1)
-                .overlay(alignment: .bottomTrailing) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 5, height: 5)
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white.opacity(0.85), lineWidth: 0.7)
-                        )
-                        .offset(x: 1.5, y: 1)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 3) {
+                ProviderLogo(provider: provider)
+                    .frame(width: 12, height: 12)
+                    .opacity(snapshot == nil ? 0.55 : 1)
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 5, height: 5)
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white.opacity(0.85), lineWidth: 0.7)
+                            )
+                            .offset(x: 1.5, y: 1)
+                    }
 
-            Text(usedText)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(textColor)
-                .monospacedDigit()
-                .frame(minWidth: 18, alignment: .leading)
+                Text(usedText)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(textColor)
+                    .monospacedDigit()
+                    .frame(minWidth: 18, alignment: .leading)
+            }
+
+            if let resetText {
+                Text(resetText)
+                    .font(.system(size: 7, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .padding(.leading, 15)
+            } else {
+                Color.clear
+                    .frame(height: 8)
+            }
         }
+        .frame(width: 36, alignment: .leading)
         .help("\(provider.displayName) 5-hour usage")
     }
 
@@ -299,6 +313,25 @@ private struct CollapsedProviderView: View {
             return nil
         }
         return window.usedPercent
+    }
+
+    private var resetText: String? {
+        guard
+            displayedUsedPercent != nil,
+            let resetsAt = snapshot?.fiveHour?.resetsAt
+        else {
+            return nil
+        }
+
+        let seconds = resetsAt.timeIntervalSince(now)
+        guard seconds > 0 else {
+            return nil
+        }
+        if seconds < 60 * 60 {
+            let minutes = max(1, min(59, Int(ceil(seconds / 60))))
+            return "\(minutes)m"
+        }
+        return "\(max(1, Int(seconds / (60 * 60))))h"
     }
 
     private func needsFreshSample(window: LimitWindow) -> Bool {
