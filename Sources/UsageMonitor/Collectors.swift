@@ -10,6 +10,7 @@ final class CodexUsageCollector: @unchecked Sendable {
     private var pollTimer: DispatchSourceTimer?
     private var scanScheduled = false
     private var lastEmittedAt: Date?
+    private var pendingFragments: [URL: String] = [:]
 
     init(root: URL, onSnapshot: @escaping (UsageSnapshot) -> Void) {
         self.root = root
@@ -37,10 +38,9 @@ final class CodexUsageCollector: @unchecked Sendable {
         let files = codexFiles().prefix(30)
         var latest: UsageSnapshot?
         for file in files {
-            if let snapshot = latestTokenCount(in: file) {
-                if latest == nil || snapshot.updatedAt > latest!.updatedAt {
-                    latest = snapshot
-                }
+            if let data = readFile(file, from: 0) {
+                let text = String(decoding: data, as: UTF8.self)
+                processTokenCountText(text, from: file, latest: &latest)
             }
             offsets[file] = fileSize(file)
         }
@@ -79,11 +79,13 @@ final class CodexUsageCollector: @unchecked Sendable {
         for file in files {
             let size = fileSize(file)
             let offset = offsets[file] ?? 0
-            defer { offsets[file] = size }
 
             if offset == 0 || size < offset {
-                if let snapshot = latestTokenCount(in: file) {
-                    latest = newer(snapshot, than: latest)
+                pendingFragments[file] = nil
+                if let data = readFile(file, from: 0) {
+                    let text = String(decoding: data, as: UTF8.self)
+                    processTokenCountText(text, from: file, latest: &latest)
+                    offsets[file] = size
                 }
                 continue
             }
@@ -92,13 +94,35 @@ final class CodexUsageCollector: @unchecked Sendable {
                 continue
             }
             let text = String(decoding: data, as: UTF8.self)
-            for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-                if let snapshot = CodexTokenCountParser.parseLine(String(line)) {
-                    latest = newer(snapshot, than: latest)
-                }
-            }
+            processTokenCountText((pendingFragments[file] ?? "") + text, from: file, latest: &latest)
+            offsets[file] = size
         }
         emitIfNewer(latest)
+    }
+
+    private func processTokenCountText(_ text: String, from file: URL, latest: inout UsageSnapshot?) {
+        guard !text.isEmpty else {
+            return
+        }
+
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if text.hasSuffix("\n") {
+            pendingFragments[file] = nil
+        } else {
+            let tail = lines.popLast() ?? ""
+            if let snapshot = CodexTokenCountParser.parseLine(tail) {
+                latest = newer(snapshot, than: latest)
+                pendingFragments[file] = nil
+            } else {
+                pendingFragments[file] = tail
+            }
+        }
+
+        for line in lines where !line.isEmpty {
+            if let snapshot = CodexTokenCountParser.parseLine(line) {
+                latest = newer(snapshot, than: latest)
+            }
+        }
     }
 
     private func newer(_ snapshot: UsageSnapshot, than existing: UsageSnapshot?) -> UsageSnapshot {
@@ -139,19 +163,6 @@ final class CodexUsageCollector: @unchecked Sendable {
             files.append((url, values?.contentModificationDate ?? .distantPast))
         }
         return files.sorted { $0.modified > $1.modified }.map(\.url)
-    }
-
-    private func latestTokenCount(in file: URL) -> UsageSnapshot? {
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else {
-            return nil
-        }
-        var latest: UsageSnapshot?
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) where line.contains("\"token_count\"") {
-            if let snapshot = CodexTokenCountParser.parseLine(String(line)) {
-                latest = snapshot
-            }
-        }
-        return latest
     }
 
     private func fileSize(_ file: URL) -> UInt64 {

@@ -455,7 +455,10 @@ private struct UsageMeter: View {
             return "waiting for update"
         }
         guard let date = window?.resetsAt else {
-            return "reset unknown"
+            if let used = displayedUsedPercent, used <= 0.5 {
+                return "ready"
+            }
+            return "waiting for reset time"
         }
         return ResetFormatter.shared.string(from: date, now: now)
     }
