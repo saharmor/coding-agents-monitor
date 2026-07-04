@@ -20,7 +20,7 @@ struct WidgetView: View {
             }
         }
         .padding(isCollapsed ? 7 : 10)
-        .frame(width: isCollapsed ? 160 : 220)
+        .frame(width: isCollapsed ? 176 : 220)
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: isCollapsed) { value in
             NotificationCenter.default.post(
@@ -313,17 +313,17 @@ private struct CollapsedProviderView: View {
         guard let used = displayedUsedPercent else {
             return "--"
         }
-        return "\(Int(round(used)))"
+        return "\(Int(round(used)))%"
     }
 
     private var usedTextWidth: CGFloat {
         if displayedUsedPercent == nil {
             return 16
         }
-        if usedText.count <= 1 {
-            return 10
+        if usedText.count <= 2 {
+            return 18
         }
-        return usedText.count == 2 ? 18 : 24
+        return usedText.count == 3 ? 24 : 30
     }
 
     private var displayedUsedPercent: Double? {
