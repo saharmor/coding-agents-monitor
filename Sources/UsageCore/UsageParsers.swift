@@ -18,13 +18,23 @@ public enum CodexTokenCountParser {
         let rateLimits = payload.dictionary("rate_limits")
         let primary = rateLimits?.dictionary("primary")
         let secondary = rateLimits?.dictionary("secondary")
+        let fiveHourRaw = rateLimitWindow(
+            durationMinutes: 300,
+            preferredFallback: primary,
+            candidates: [primary, secondary]
+        )
+        let sevenDayRaw = rateLimitWindow(
+            durationMinutes: 10_080,
+            preferredFallback: secondary,
+            candidates: [primary, secondary]
+        )
         let fiveHour = UsageJSON.limitWindow(
-            usedPercent: primary?.double("used_percent"),
-            resetsAt: primary?.double("resets_at")
+            usedPercent: fiveHourRaw?.double("used_percent"),
+            resetsAt: fiveHourRaw?.double("resets_at")
         )
         let sevenDay = UsageJSON.limitWindow(
-            usedPercent: secondary?.double("used_percent"),
-            resetsAt: secondary?.double("resets_at")
+            usedPercent: sevenDayRaw?.double("used_percent"),
+            resetsAt: sevenDayRaw?.double("resets_at")
         )
 
         let info = payload.dictionary("info")
@@ -57,6 +67,25 @@ public enum CodexTokenCountParser {
             tokens: tokens
         )
     }
+
+    private static func rateLimitWindow(
+        durationMinutes: Double,
+        preferredFallback: [String: Any]?,
+        candidates: [[String: Any]?]
+    ) -> [String: Any]? {
+        if let matching = candidates.compactMap({ $0 }).first(where: {
+            $0.double("window_minutes") == durationMinutes
+        }) {
+            return matching
+        }
+
+        // Older Codex events did not always include window_minutes. Preserve
+        // their primary/secondary ordering only when the fallback is untyped.
+        guard preferredFallback?.double("window_minutes") == nil else {
+            return nil
+        }
+        return preferredFallback
+    }
 }
 
 public enum ClaudeStatusLineParser {
@@ -68,7 +97,7 @@ public enum ClaudeStatusLineParser {
         if root.string("provider") == UsageProvider.claude.rawValue {
             return parseNormalized(root)
         }
-        if root.dictionary("five_hour") != nil || root.dictionary("seven_day") != nil {
+        if root.dictionary("five_hour") != nil || root.dictionary("seven_day") != nil || root["limits"] is [Any] {
             return parseOAuthUsage(root)
         }
 
@@ -86,15 +115,19 @@ public enum ClaudeStatusLineParser {
             sevenDay: sevenDay,
             context: context,
             updatedAt: UsageJSON.parseISODate(root.string("updatedAt")) ?? Date(),
-            source: .claudeStatusLine
+            source: .claudeStatusLine,
+            fableWeekly: normalizedWindow(root.dictionary("fableWeekly")),
+            fableWeeklyUpdatedAt: UsageJSON.parseISODate(root.string("fableWeeklyUpdatedAt"))
         )
     }
 
     private static func parseOAuthUsage(_ root: [String: Any]) -> UsageSnapshot? {
         let fiveHour = oauthWindow(root.dictionary("five_hour"))
         let sevenDay = oauthWindow(root.dictionary("seven_day"))
+        let fable = fableWindow(root)
+        let now = Date()
 
-        guard fiveHour != nil || sevenDay != nil else {
+        guard fiveHour != nil || sevenDay != nil || fable != nil else {
             return nil
         }
 
@@ -103,13 +136,17 @@ public enum ClaudeStatusLineParser {
             fiveHour: fiveHour,
             sevenDay: sevenDay,
             context: nil,
-            updatedAt: Date(),
-            source: .claudeStatusLine
+            updatedAt: now,
+            source: .claudeStatusLine,
+            fableWeekly: fable,
+            fableWeeklyUpdatedAt: fable == nil ? nil : now
         )
     }
 
     private static func parseStatusLineInput(_ root: [String: Any]) -> UsageSnapshot? {
         let rateLimits = root.dictionary("rate_limits")
+        let fable = rateLimits.flatMap(fableWindow)
+        let now = Date()
         let fiveHourRaw = rateLimits?.dictionary("five_hour")
         let sevenDayRaw = rateLimits?.dictionary("seven_day")
         let fiveHour = UsageJSON.limitWindow(
@@ -131,7 +168,7 @@ public enum ClaudeStatusLineParser {
             tokens: tokenTotal > 0 ? tokenTotal : nil
         )
 
-        guard fiveHour != nil || sevenDay != nil || context.tokens != nil else {
+        guard fiveHour != nil || sevenDay != nil || fable != nil || context.tokens != nil else {
             return nil
         }
 
@@ -140,9 +177,25 @@ public enum ClaudeStatusLineParser {
             fiveHour: fiveHour,
             sevenDay: sevenDay,
             context: context,
-            updatedAt: Date(),
-            source: .claudeStatusLine
+            updatedAt: now,
+            source: .claudeStatusLine,
+            fableWeekly: fable,
+            fableWeeklyUpdatedAt: fable == nil ? nil : now
         )
+    }
+
+    private static func fableWindow(_ usage: [String: Any]) -> LimitWindow? {
+        // Match the provider's model label, not the all-models or Sonnet quota.
+        guard let limits = usage["limits"] as? [[String: Any]],
+              let raw = limits.first(where: {
+                  $0.string("kind") == "weekly_scoped"
+                      && $0.dictionary("scope")?.dictionary("model")?
+                          .string("display_name")?.lowercased() == "fable"
+              }) else { return nil }
+        return oauthWindow([
+            "utilization": raw["percent"] ?? NSNull(),
+            "resets_at": raw["resets_at"] ?? NSNull()
+        ])
     }
 
     private static func normalizedWindow(_ raw: [String: Any]?) -> LimitWindow? {

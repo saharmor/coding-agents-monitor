@@ -8,7 +8,7 @@
 
 A tiny always-on-top macOS widget for keeping an eye on Claude Code and Codex usage before you run out mid-flow.
 
-**Privacy Note**: Usage is read from local Codex and Claude Code signals. Prompts, transcripts, OAuth tokens, and raw provider API responses are not stored by the widget.
+**Privacy Note**: Codex account limits are fetched through your installed Codex CLI and its existing login. Claude uses its local bridge. Prompts, transcripts, OAuth tokens, and raw provider API responses are not stored by the widget.
 
 <p>
 <a href="https://www.linkedin.com/in/sahar-mor/" target="_blank"><img src="https://img.shields.io/badge/LinkedIn-Connect-blue" alt="LinkedIn"></a>
@@ -21,15 +21,16 @@ A tiny always-on-top macOS widget for keeping an eye on Claude Code and Codex us
 ## Features
 
 - **Claude first**: Claude Code appears first because it is usually the daily driver.
-- **5-hour usage at a glance**: See consumed session usage and the next reset time.
+- **Usage at a glance**: See consumed 5-hour usage and its reset time, falling back to the 7-day limit when no 5-hour limit is reported.
+- **Fable weekly at a glance**: Claude's compact reading includes Fable weekly usage in parentheses, for example `4%(59%) 2h`. The time remains the main window's reset countdown. Fable gets its own row in the expanded weekly view and its own freshness timestamp; stale model readings show `--`, never a guessed zero.
 - **Weekly view on demand**: Click the calendar button to expand the less-important 7-day windows.
-- **Local-first updates**: Codex and Claude usage files are watched locally; the app does not poll providers on a loop.
+- **Fresh Codex account limits**: A quota-only account request runs on launch, once per minute, on wake, and when expanding the widget (throttled to at most once every 10 seconds).
 - **Claude cache fallback**: The tiny Claude cache file is checked every 15 seconds, and only parsed if its size or modified time changed.
 - **Actual Claude refresh**: Claude usage is refreshed through the installed bridge once per minute so the widget matches Claude Code's Account & Usage panel.
-- **Codex missed-event recovery**: Recent Codex rollout files are checked every 15 seconds, and only appended bytes are parsed when file sizes changed.
+- **Resets without chat activity**: Codex account resets are detected without waiting for a new conversation or reading session history. A known reset also schedules a refresh near its deadline.
 - **Lightweight clock tick**: Reset labels update every 30 seconds without rereading token logs.
 - **Launches at login**: The app registers a small LaunchAgent so the widget comes back after restart/login.
-- **Honest stale states**: If a reset passes before a fresh local sample arrives, the row shows `waiting for update` instead of inventing a number.
+- **Honest stale states**: Readings older than two minutes or past their reset are hidden and marked stale. Failed account checks time out after 15 seconds and retry with backoff up to five minutes; only one request can run at a time.
 
 ## Quick Start
 
@@ -46,10 +47,10 @@ When launched from the `.app`, it also registers itself to open at login.
 
 ## How It Works
 
-- **Codex**: Watches `~/.codex/sessions/**/rollout-*.jsonl` and parses appended `payload.type == "token_count"` events.
+- **Codex**: Opens a short-lived `codex app-server` connection and calls [`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt). It selects the `codex` bucket by ID and maps windows by duration. Each request exits afterward; no model turn is created and no session tree is scanned. Old logs cannot overwrite an account reset.
 - **Claude Code**: Installs a status-line bridge at `~/.usage-monitor/claude-statusline-bridge.mjs`, which writes sanitized usage data to `~/.usage-monitor/claude-status.json`.
 - **Actual usage refresh**: On launch and then once per minute, the app asks the bridge to refresh Claude usage from Claude Code's OAuth usage endpoint.
-- **Missed-event recovery**: If macOS drops a directory change event, the widget catches up from recent Codex file appends or the local Claude cache on the next 15-second check.
+- **Missed-event recovery**: Claude's cache is checked on the next 15-second check if macOS drops an event. Codex refreshes directly from its account service, including usage from other sessions or devices, as reported by the service.
 - **No transcript storage**: The app stores only usage percentages, reset timestamps, context token counts, and update times.
 
 ## Requirements
@@ -58,7 +59,7 @@ When launched from the `.app`, it also registers itself to open at login.
 - Swift toolchain or Xcode Command Line Tools
 - Node.js available at `/usr/bin/env node`
 - Claude Code already logged in with Claude.ai if Claude usage should appear immediately
-- Codex session logs under `~/.codex/sessions` if Codex usage should appear
+- Codex CLI installed and signed in with ChatGPT. PATH, Homebrew, `~/.local/bin`, nvm installations, and the standard Codex app bundle are checked. Set `USAGE_MONITOR_CODEX_PATH` to an executable path for a custom installation.
 
 ## Install Claude Bridge Only
 
@@ -76,7 +77,9 @@ The installer updates `~/.claude/settings.json` and backs up any previous settin
 ```bash
 swift test
 node --check bridge/claude-statusline-bridge.mjs
+node --test bridge/claude-statusline-bridge.test.mjs
 bash -n scripts/build_app.sh
+"outputs/Usage Monitor.app/Contents/MacOS/UsageMonitor" --check-codex-usage
 ```
 
 ## Coding Agent Prompt
@@ -89,14 +92,14 @@ You are installing Coding Agents Monitor from a freshly cloned repository on mac
 Goal: build, install, launch, and verify the native floating widget for Claude Code and Codex usage. Do not ask the user for choices unless a required prerequisite is missing or a macOS security prompt requires the user's manual approval.
 
 Steps:
-1. Confirm the machine is macOS and that `swift`, `node`, and `gh` are available. Do not install package managers. If Swift or Node is missing, stop with the exact missing prerequisite.
+1. Confirm the machine is macOS and that `swift`, `node`, and Codex CLI are available. Codex must already be logged in with ChatGPT. Do not install package managers. If a prerequisite is missing, report the exact prerequisite.
 2. From the repository root, run `swift test`.
 3. Run `node --check bridge/claude-statusline-bridge.mjs`.
 4. Run `bash -n scripts/build_app.sh`.
 5. Run `scripts/build_app.sh`.
 6. Run `"outputs/Usage Monitor.app/Contents/MacOS/UsageMonitor" --install-bridge-only` to install or update the Claude Code status-line bridge. This may write `~/.usage-monitor/claude-statusline-bridge.mjs`, `~/.usage-monitor/claude-status.json`, and `~/.claude/settings.json`; preserve backups created by the installer.
 7. Launch the widget with `open "outputs/Usage Monitor.app"`.
-8. Verify the app is running. If you have GUI inspection available, confirm the compact widget shows Claude above Codex, uses provider logos instead of row names, and displays consumed 5-hour usage percentages with `resets in ... (...)` copy. If GUI inspection is not available, confirm a `UsageMonitor` process is running and `~/.usage-monitor/claude-status.json` exists when Claude Code credentials are available.
+8. Run `"outputs/Usage Monitor.app/Contents/MacOS/UsageMonitor" --check-codex-usage` to verify a live Codex account reading (sanitized usage fields only). Verify the running widget shows Claude above Codex, provider logos, and consumed usage with reset times. A weekly-only account must show `7d`. Wait for a minute to verify an automatic account refresh without creating a chat. If GUI inspection is unavailable, report that limit and verify the diagnostic command and Claude cache instead.
 9. Leave the widget running in compact mode. Summarize the installed bridge path, app path, and verification results.
 
 Safety rules:

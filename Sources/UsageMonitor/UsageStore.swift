@@ -1,4 +1,5 @@
-import Foundation
+import AppKit
+import Combine
 import UsageCore
 
 @MainActor
@@ -6,8 +7,15 @@ final class UsageStore: ObservableObject {
     @Published var codex: UsageSnapshot?
     @Published var claude: UsageSnapshot?
     @Published var setupMessage = "Setting up Claude bridge..."
+    @Published var codexRefreshError: String?
 
-    private var codexCollector: CodexUsageCollector?
+    private let codexReader = CodexAccountReader()
+    private var codexTimer: Timer?
+    private var codexRefreshInFlight = false
+    private var lastCodexAttempt = Date.distantPast
+    private var codexFailures = 0
+    private var isSleeping = false
+    private var observers = Set<AnyCancellable>()
     private var claudeCollector: ClaudeUsageCollector?
     private let claudeUsageRefresher = ClaudeUsageRefresher()
 
@@ -15,18 +23,87 @@ final class UsageStore: ObservableObject {
         installClaudeBridge()
 
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let codexRoot = home.appendingPathComponent(".codex/sessions")
         let claudeStatus = home.appendingPathComponent(".usage-monitor/claude-status.json")
 
-        codexCollector = CodexUsageCollector(root: codexRoot) { [weak self] snapshot in
-            self?.codex = snapshot
-        }
         claudeCollector = ClaudeUsageCollector(file: claudeStatus) { [weak self] snapshot in
             self?.claude = snapshot
         }
 
-        codexCollector?.start()
+        startCodexMonitoring()
         claudeCollector?.start()
+    }
+
+    private func startCodexMonitoring() {
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.isSleeping = false
+                    self?.refreshCodex()
+                }
+            }.store(in: &observers)
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.isSleeping = true
+                    self?.codexTimer?.invalidate()
+                    self?.codexReader.cancel()
+                }
+            }.store(in: &observers)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.refreshCodex() }
+            }.store(in: &observers)
+        refreshCodex()
+    }
+
+    func refreshCodex() {
+        guard !isSleeping, !codexRefreshInFlight else { return }
+        let sinceLastAttempt = Date().timeIntervalSince(lastCodexAttempt)
+        guard sinceLastAttempt >= 10 else {
+            scheduleCodexRefresh(after: 10 - sinceLastAttempt)
+            return
+        }
+        codexTimer?.invalidate()
+        lastCodexAttempt = Date()
+        codexRefreshInFlight = true
+        codexReader.read { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.codexRefreshInFlight = false
+                let delay: TimeInterval
+                switch result {
+                case .success(let snapshot):
+                    // Account replies supersede saved session events after a reset.
+                    self.codex = snapshot
+                    self.codexRefreshError = nil
+                    self.codexFailures = 0
+                    delay = UsageFreshness.nextRefresh(after: snapshot, now: Date())
+                case .failure(let error):
+                    self.codexRefreshError = error.localizedDescription
+                    self.codexFailures = min(4, self.codexFailures + 1)
+                    delay = min(300, 30 * pow(2, Double(self.codexFailures)))
+                }
+                guard !self.isSleeping else { return }
+                self.scheduleCodexRefresh(after: max(10, delay))
+            }
+        }
+    }
+
+    private func scheduleCodexRefresh(after delay: TimeInterval) {
+        codexTimer?.invalidate()
+        let timer = Timer(timeInterval: max(1, delay), repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.refreshCodex() }
+        }
+        timer.tolerance = 1
+        RunLoop.main.add(timer, forMode: .common)
+        codexTimer = timer
+    }
+
+    func stop() {
+        isSleeping = true
+        codexTimer?.invalidate()
+        codexReader.cancel()
+        observers.removeAll()
     }
 
     func installBridgeOnlyAndExit() {

@@ -19,7 +19,8 @@ let package = Package(
         ),
         .testTarget(
             name: "UsageCoreTests",
-            dependencies: ["UsageCore"]
+            dependencies: ["UsageCore"],
+            exclude: ["Fixtures"]
         )
     ]
 )

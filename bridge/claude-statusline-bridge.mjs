@@ -4,12 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 const args = new Set(process.argv.slice(2));
 const refreshOnly = args.has('--refresh-only');
 const printSummary = args.has('--print-summary');
 const debugEnabled = process.env.USAGE_MONITOR_DEBUG === '1';
-const rawInput = refreshOnly ? '' : fs.readFileSync(0, 'utf8');
+let rawInput = '';
 
 const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const CLAUDE_SCOPES = [
@@ -45,6 +46,8 @@ function debugError(label, error) {
 }
 
 function finiteNumber(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -103,10 +106,22 @@ function normalizeContext(raw) {
   };
 }
 
+function normalizeFableWindow(usage) {
+  const raw = Array.isArray(usage?.limits) ? usage.limits.find(limit =>
+    limit?.kind === 'weekly_scoped' &&
+    typeof limit.scope?.model?.display_name === 'string' &&
+    limit.scope.model.display_name.toLowerCase() === 'fable'
+  ) : null;
+  if (!raw) return null;
+  const window = normalizeOAuthWindow({ utilization: raw.percent, resets_at: raw.resets_at });
+  return window?.usedPercent == null ? null : window;
+}
+
 function snapshotHasUsage(snapshot) {
   return Boolean(
     snapshot?.fiveHour?.remainingPercent !== null && snapshot?.fiveHour?.remainingPercent !== undefined ||
     snapshot?.sevenDay?.remainingPercent !== null && snapshot?.sevenDay?.remainingPercent !== undefined ||
+    snapshot?.fableWeekly?.remainingPercent !== null && snapshot?.fableWeekly?.remainingPercent !== undefined ||
     snapshot?.context?.tokens !== null && snapshot?.context?.tokens !== undefined
   );
 }
@@ -307,26 +322,52 @@ async function fetchClaudeUsage() {
   }
 }
 
-function snapshotFromOAuthUsage(usage) {
+export function snapshotFromOAuthUsage(usage) {
+  const now = new Date().toISOString();
+  const fable = normalizeFableWindow(usage);
   return {
     provider: 'claude',
     fiveHour: normalizeOAuthWindow(usage?.five_hour),
     sevenDay: normalizeOAuthWindow(usage?.seven_day),
+    fableWeekly: fable,
+    fableWeeklyUpdatedAt: fable ? now : null,
     context: null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
     source: 'claude-statusline'
   };
 }
 
-function snapshotFromStatusLine(input) {
+export function snapshotFromStatusLine(input) {
+  const now = new Date().toISOString();
+  const fable = normalizeFableWindow(input.rate_limits);
   return {
     provider: 'claude',
     fiveHour: normalizeStatusLineWindow(input.rate_limits?.five_hour),
     sevenDay: normalizeStatusLineWindow(input.rate_limits?.seven_day),
+    fableWeekly: fable,
+    fableWeeklyUpdatedAt: fable ? now : null,
     context: normalizeContext(input.context_window),
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
     source: 'claude-statusline'
   };
+}
+
+function preserveCachedFable(snapshot) {
+  if (snapshot.fableWeekly) return snapshot;
+  try {
+    const cached = JSON.parse(fs.readFileSync(path.join(usageMonitorRoot(), 'claude-status.json'), 'utf8'));
+    const raw = cached.provider === 'claude' ? cached.fableWeekly : null;
+    const window = normalizeOAuthWindow({ utilization: raw?.usedPercent, resets_at: raw?.resetsAt });
+    const timestamp = Date.parse(cached.fableWeeklyUpdatedAt);
+    // Status-line input may omit model quotas. Keep the sample, not a new timestamp.
+    if (window?.usedPercent != null && Number.isFinite(timestamp) && timestamp <= Date.now()) {
+      snapshot.fableWeekly = window;
+      snapshot.fableWeeklyUpdatedAt = new Date(timestamp).toISOString();
+    }
+  } catch {
+    // No usable cached model quota yet.
+  }
+  return snapshot;
 }
 
 function existingCommand() {
@@ -365,6 +406,8 @@ function summary(snapshot) {
   return JSON.stringify({
     fiveHourRemainingPercent: snapshot.fiveHour?.remainingPercent ?? null,
     sevenDayRemainingPercent: snapshot.sevenDay?.remainingPercent ?? null,
+    fableWeeklyUsedPercent: snapshot.fableWeekly?.usedPercent ?? null,
+    fableWeeklyResetsAt: snapshot.fableWeekly?.resetsAt ?? null,
     fiveHourResetsAt: snapshot.fiveHour?.resetsAt ?? null,
     sevenDayResetsAt: snapshot.sevenDay?.resetsAt ?? null,
     updatedAt: snapshot.updatedAt
@@ -372,8 +415,10 @@ function summary(snapshot) {
 }
 
 async function main() {
+  rawInput = refreshOnly ? '' : fs.readFileSync(0, 'utf8');
   const input = parseInput(rawInput);
   let snapshot = refreshOnly ? null : snapshotFromStatusLine(input);
+  const usesStatusLine = snapshotHasUsage(snapshot);
 
   if (!snapshotHasUsage(snapshot)) {
     try {
@@ -386,6 +431,7 @@ async function main() {
 
   if (snapshotHasUsage(snapshot)) {
     try {
+      if (usesStatusLine) snapshot = preserveCachedFable(snapshot);
       writeSnapshot(snapshot);
     } catch (error) {
       debugError('snapshot-write', error);
@@ -404,9 +450,9 @@ async function main() {
   process.stdout.write(preserved ?? fallbackLine(snapshot ?? snapshotFromStatusLine(input)));
 }
 
-main().catch((error) => {
-  debugError('bridge-main', error);
-  if (!refreshOnly) {
-    process.stdout.write('');
-  }
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    debugError('bridge-main', error);
+    if (!refreshOnly) process.stdout.write('');
+  });
+}

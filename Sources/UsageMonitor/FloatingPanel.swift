@@ -13,9 +13,9 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let defaultsKey = "floatingPanelFrame"
     private let collapsedDefaultsKey = "usageWidgetCollapsed"
     private let snoozeUntilDefaultsKey = "usageWidgetSnoozeUntil"
-    private let collapsedSize = NSSize(width: 176, height: 42)
+    private let collapsedSize = NSSize(width: 208, height: 42)
     private let compactSize = NSSize(width: 220, height: 112)
-    private let weeklySize = NSSize(width: 220, height: 158)
+    private let weeklySize = NSSize(width: 220, height: 186)
     private let cornerRadius: CGFloat = 12
     private let snoozeDuration: TimeInterval = 60 * 60
     private var isCollapsed: Bool

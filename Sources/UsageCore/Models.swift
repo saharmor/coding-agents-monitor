@@ -7,6 +7,7 @@ public enum UsageProvider: String, Codable, Equatable, Sendable {
 
 public enum UsageSource: String, Codable, Equatable, Sendable {
     case codexJSONL = "codex-jsonl"
+    case codexAccount = "codex-account"
     case claudeStatusLine = "claude-statusline"
 }
 
@@ -38,6 +39,8 @@ public struct UsageSnapshot: Codable, Equatable, Sendable {
     public var provider: UsageProvider
     public var fiveHour: LimitWindow?
     public var sevenDay: LimitWindow?
+    public var fableWeekly: LimitWindow?
+    public var fableWeeklyUpdatedAt: Date?
     public var context: ContextUsage?
     public var updatedAt: Date
     public var source: UsageSource
@@ -48,11 +51,15 @@ public struct UsageSnapshot: Codable, Equatable, Sendable {
         sevenDay: LimitWindow?,
         context: ContextUsage?,
         updatedAt: Date,
-        source: UsageSource
+        source: UsageSource,
+        fableWeekly: LimitWindow? = nil,
+        fableWeeklyUpdatedAt: Date? = nil
     ) {
         self.provider = provider
         self.fiveHour = fiveHour
         self.sevenDay = sevenDay
+        self.fableWeekly = fableWeekly
+        self.fableWeeklyUpdatedAt = fableWeeklyUpdatedAt
         self.context = context
         self.updatedAt = updatedAt
         self.source = source

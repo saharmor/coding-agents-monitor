@@ -20,9 +20,10 @@ struct WidgetView: View {
             }
         }
         .padding(isCollapsed ? 7 : 10)
-        .frame(width: isCollapsed ? 176 : 220)
+        .frame(width: isCollapsed ? 208 : 220)
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: isCollapsed) { value in
+            store.refreshCodex()
             NotificationCenter.default.post(
                 name: .usageMonitorCollapsedChanged,
                 object: nil,
@@ -117,7 +118,8 @@ struct WidgetView: View {
             }
 
             ProviderView(provider: .claude, snapshot: store.claude, showsWeekly: showsWeekly, now: now)
-            ProviderView(provider: .codex, snapshot: store.codex, showsWeekly: showsWeekly, now: now)
+            ProviderView(provider: .codex, snapshot: store.codex, showsWeekly: showsWeekly, now: now,
+                         refreshError: store.codexRefreshError)
         }
     }
 
@@ -144,7 +146,7 @@ struct WidgetView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .buttonStyle(.plain)
-        .help("Expand usage")
+        .help("Expand usage. Claude parentheses show Fable weekly usage.")
     }
 }
 
@@ -153,6 +155,7 @@ private struct ProviderView: View {
     var snapshot: UsageSnapshot?
     var showsWeekly: Bool
     var now: Date
+    var refreshError: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -160,18 +163,18 @@ private struct ProviderView: View {
                 ProviderLogo(provider: provider)
                     .frame(width: 16, height: 16)
                     .opacity(snapshot == nil ? 0.55 : 1)
-                    .help(provider.displayName)
+                    .help(refreshError ?? "\(provider.displayName). Last checked: \(snapshot?.updatedAt.formatted(date: .omitted, time: .standard) ?? "waiting")")
 
                 UsageMeter(
-                    label: "5h",
-                    window: snapshot?.fiveHour,
+                    label: primaryLabel,
+                    window: primaryWindow,
                     snapshotUpdatedAt: snapshot?.updatedAt,
-                    emptyText: statusText,
+                    emptyText: statusText(for: primaryWindow),
                     now: now
                 )
             }
 
-            if showsWeekly {
+            if showsWeekly && !usesWeeklyFallback {
                 HStack(spacing: 7) {
                     Color.clear
                         .frame(width: 16, height: 16)
@@ -180,17 +183,46 @@ private struct ProviderView: View {
                         label: "7d",
                         window: snapshot?.sevenDay,
                         snapshotUpdatedAt: snapshot?.updatedAt,
-                        emptyText: statusText,
+                        emptyText: statusText(for: snapshot?.sevenDay),
                         now: now
                     )
+                }
+            }
+
+            if showsWeekly && provider == .claude {
+                HStack(spacing: 7) {
+                    Color.clear.frame(width: 16, height: 16)
+                    UsageMeter(
+                        label: "Fable",
+                        window: snapshot?.fableWeekly,
+                        snapshotUpdatedAt: snapshot?.fableWeeklyUpdatedAt,
+                        emptyText: "not reported",
+                        now: now
+                    )
+                    .help("Fable weekly usage")
                 }
             }
         }
     }
 
-    private var statusText: String {
+    private var primaryWindow: LimitWindow? {
+        snapshot?.fiveHour ?? snapshot?.sevenDay
+    }
+
+    private var primaryLabel: String {
+        usesWeeklyFallback ? "7d" : "5h"
+    }
+
+    private var usesWeeklyFallback: Bool {
+        snapshot?.fiveHour == nil && snapshot?.sevenDay != nil
+    }
+
+    private func statusText(for window: LimitWindow?) -> String {
         guard let snapshot else {
-            return "waiting"
+            return refreshError == nil ? "refreshing..." : "refresh unavailable"
+        }
+        guard window != nil else {
+            return "not reported"
         }
         let age = now.timeIntervalSince(snapshot.updatedAt)
         if age > 600 {
@@ -288,12 +320,20 @@ private struct CollapsedProviderView: View {
                         .offset(x: 1.5, y: 1)
                 }
 
-            Text(usedText)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(textColor)
-                .monospacedDigit()
-                .lineLimit(1)
-                .frame(width: usedTextWidth, alignment: .leading)
+            HStack(spacing: 0) {
+                Text(usedText)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(textColor)
+
+                if provider == .claude, snapshot?.fableWeekly != nil {
+                    Text(fableText)
+                        .font(.system(size: 8, weight: .semibold, design: .rounded))
+                        .foregroundStyle(fableColor)
+                }
+            }
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
 
             if let resetText {
                 Text(resetText)
@@ -306,7 +346,7 @@ private struct CollapsedProviderView: View {
             }
         }
         .fixedSize(horizontal: true, vertical: false)
-        .help("\(provider.displayName) 5-hour usage")
+        .help("\(provider.displayName) \(usesWeeklyFallback ? "7-day" : "5-hour") usage.\(provider == .claude ? " Parentheses: Fable weekly usage." : "") Last checked: \(snapshot?.updatedAt.formatted(date: .omitted, time: .standard) ?? "waiting")")
     }
 
     private var usedText: String {
@@ -316,19 +356,27 @@ private struct CollapsedProviderView: View {
         return "\(Int(round(used)))%"
     }
 
-    private var usedTextWidth: CGFloat {
-        if displayedUsedPercent == nil {
-            return 16
-        }
-        if usedText.count <= 2 {
-            return 18
-        }
-        return usedText.count == 3 ? 24 : 30
+    private var displayedFablePercent: Double? {
+        guard let window = snapshot?.fableWeekly,
+              !UsageFreshness.needsUpdate(window: window,
+                                          updatedAt: snapshot?.fableWeeklyUpdatedAt, now: now)
+        else { return nil }
+        return window.usedPercent
+    }
+
+    private var fableText: String {
+        displayedFablePercent.map { "(\(Int(round($0)))%)" } ?? "(--)"
+    }
+
+    private var fableColor: Color {
+        guard let used = displayedFablePercent else { return .secondary }
+        if used >= 90 { return .red }
+        return used >= 70 ? .orange : .secondary
     }
 
     private var displayedUsedPercent: Double? {
         guard
-            let window = snapshot?.fiveHour,
+            let window = primaryWindow,
             !needsFreshSample(window: window)
         else {
             return nil
@@ -339,7 +387,7 @@ private struct CollapsedProviderView: View {
     private var resetText: String? {
         guard
             displayedUsedPercent != nil,
-            let resetsAt = snapshot?.fiveHour?.resetsAt
+            let resetsAt = primaryWindow?.resetsAt
         else {
             return nil
         }
@@ -356,14 +404,15 @@ private struct CollapsedProviderView: View {
     }
 
     private func needsFreshSample(window: LimitWindow) -> Bool {
-        guard
-            let resetsAt = window.resetsAt,
-            let snapshotUpdatedAt = snapshot?.updatedAt,
-            resetsAt <= now
-        else {
-            return false
-        }
-        return snapshotUpdatedAt < resetsAt
+        UsageFreshness.needsUpdate(window: window, updatedAt: snapshot?.updatedAt, now: now)
+    }
+
+    private var primaryWindow: LimitWindow? {
+        snapshot?.fiveHour ?? snapshot?.sevenDay
+    }
+
+    private var usesWeeklyFallback: Bool {
+        snapshot?.fiveHour == nil && snapshot?.sevenDay != nil
     }
 
     private var textColor: Color {
@@ -399,7 +448,8 @@ private struct UsageMeter: View {
             HStack {
                 Text(label)
                     .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .frame(width: 20, alignment: .leading)
+                    .lineLimit(1)
+                    .frame(width: label == "Fable" ? 32 : 20, alignment: .leading)
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.white.opacity(0.12))
@@ -430,14 +480,7 @@ private struct UsageMeter: View {
     }
 
     private var needsFreshSample: Bool {
-        guard
-            let resetsAt = window?.resetsAt,
-            let snapshotUpdatedAt,
-            resetsAt <= now
-        else {
-            return false
-        }
-        return snapshotUpdatedAt < resetsAt
+        UsageFreshness.needsUpdate(window: window, updatedAt: snapshotUpdatedAt, now: now)
     }
 
     private var usedText: String {
@@ -452,7 +495,7 @@ private struct UsageMeter: View {
             return emptyText
         }
         if needsFreshSample {
-            return "waiting for update"
+            return "stale - refreshing"
         }
         guard let date = window?.resetsAt else {
             if let used = displayedUsedPercent, used <= 0.5 {
