@@ -26,11 +26,11 @@ A tiny always-on-top macOS widget for keeping an eye on Claude Code and Codex us
 - **Weekly view on demand**: Click the calendar button to expand the less-important 7-day windows.
 - **Fresh Codex account limits**: A quota-only account request runs on launch, once per minute, on wake, and when expanding the widget (throttled to at most once every 10 seconds).
 - **Claude cache fallback**: The tiny Claude cache file is checked every 15 seconds, and only parsed if its size or modified time changed.
-- **Actual Claude refresh**: Claude usage is refreshed through the installed bridge once per minute so the widget matches Claude Code's Account & Usage panel.
+- **Actual Claude refresh**: Claude usage is normally refreshed every five minutes. After a rate limit, polling stays at 15-minute intervals for 24 hours after the last 429, even after a successful check. Node is discovered independently of your shell, including nvm installations, so Finder/login launches work too. Wake and reopen events respect the retry schedule. Status-line callbacks only contribute supplied usage; they never make API requests.
 - **Resets without chat activity**: Codex account resets are detected without waiting for a new conversation or reading session history. A known reset also schedules a refresh near its deadline.
 - **Lightweight clock tick**: Reset labels update every 30 seconds without rereading token logs.
 - **Launches at login**: The app registers a small LaunchAgent so the widget comes back after restart/login.
-- **Honest stale states**: Readings older than two minutes or past their reset are hidden and marked stale. Failed account checks time out after 15 seconds and retry with backoff up to five minutes; only one request can run at a time.
+- **Honest stale states**: Readings older than two minutes or past their reset are hidden and marked stale. Claude checks share an on-disk lock and cooldown across app instances and restarts. A 429 waits at least 15 minutes, doubling on repeated failures up to one hour; a longer server `Retry-After` is always honored. Cooldowns never change cache timestamps. Claude bridge runs time out after 30 seconds. Codex checks time out after 15 seconds and retry with backoff up to five minutes.
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ When launched from the `.app`, it also registers itself to open at login.
 
 - **Codex**: Opens a short-lived `codex app-server` connection and calls [`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt). It selects the `codex` bucket by ID and maps windows by duration. Each request exits afterward; no model turn is created and no session tree is scanned. Old logs cannot overwrite an account reset.
 - **Claude Code**: Installs a status-line bridge at `~/.usage-monitor/claude-statusline-bridge.mjs`, which writes sanitized usage data to `~/.usage-monitor/claude-status.json`.
-- **Actual usage refresh**: On launch and then once per minute, the app asks the bridge to refresh Claude usage from Claude Code's OAuth usage endpoint.
+- **Actual usage refresh**: On launch and then every five minutes (15 minutes after a recent rate limit), the app asks the bridge to refresh Claude usage from Claude Code's OAuth usage endpoint, subject to its shared cooldown. All Claude windows come from one response, not one request per row. These are conservative client intervals, not a guarantee of the provider's available request allowance.
 - **Missed-event recovery**: Claude's cache is checked on the next 15-second check if macOS drops an event. Codex refreshes directly from its account service, including usage from other sessions or devices, as reported by the service.
 - **No transcript storage**: The app stores only usage percentages, reset timestamps, context token counts, and update times.
 
@@ -57,7 +57,7 @@ When launched from the `.app`, it also registers itself to open at login.
 
 - macOS 13 or newer
 - Swift toolchain or Xcode Command Line Tools
-- Node.js available at `/usr/bin/env node`
+- Node.js installed via nvm, Homebrew, `~/.local/bin`, or on PATH. Set `USAGE_MONITOR_NODE_PATH` to an executable path for a custom installation; no shell configuration is loaded by the widget.
 - Claude Code already logged in with Claude.ai if Claude usage should appear immediately
 - Codex CLI installed and signed in with ChatGPT. PATH, Homebrew, `~/.local/bin`, nvm installations, and the standard Codex app bundle are checked. Set `USAGE_MONITOR_CODEX_PATH` to an executable path for a custom installation.
 

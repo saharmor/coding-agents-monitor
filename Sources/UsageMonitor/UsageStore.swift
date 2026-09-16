@@ -8,10 +8,13 @@ final class UsageStore: ObservableObject {
     @Published var claude: UsageSnapshot?
     @Published var setupMessage = "Setting up Claude bridge..."
     @Published var codexRefreshError: String?
+    @Published var claudeRefreshError: String?
+    @Published private(set) var manualRefreshInFlight = false
+    @Published private(set) var manualRefreshMessage: String?
 
     private let codexReader = CodexAccountReader()
     private var codexTimer: Timer?
-    private var codexRefreshInFlight = false
+    @Published private(set) var codexRefreshInFlight = false
     private var lastCodexAttempt = Date.distantPast
     private var codexFailures = 0
     private var isSleeping = false
@@ -39,6 +42,7 @@ final class UsageStore: ObservableObject {
                 Task { @MainActor in
                     self?.isSleeping = false
                     self?.refreshCodex()
+                    self?.refreshClaude()
                 }
             }.store(in: &observers)
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)
@@ -51,7 +55,10 @@ final class UsageStore: ObservableObject {
             }.store(in: &observers)
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in
-                Task { @MainActor in self?.refreshCodex() }
+                Task { @MainActor in
+                    self?.refreshCodex()
+                    self?.refreshClaude()
+                }
             }.store(in: &observers)
         refreshCodex()
     }
@@ -103,13 +110,16 @@ final class UsageStore: ObservableObject {
         isSleeping = true
         codexTimer?.invalidate()
         codexReader.cancel()
+        claudeUsageRefresher.stop()
         observers.removeAll()
     }
 
     func installBridgeOnlyAndExit() {
         do {
             let result = try makeInstaller().install()
-            Self.refreshClaudeUsage(bridgePath: result.bridgePath)
+            if case .failure(let error) = ClaudeBridgeRunner.refresh(bridgePath: result.bridgePath) {
+                print("Claude usage refresh: \(error.localizedDescription)")
+            }
             print("Claude bridge installed at \(result.bridgePath)")
             if let backupPath = result.backupPath {
                 print("Settings backup: \(backupPath)")
@@ -133,10 +143,17 @@ final class UsageStore: ObservableObject {
         DispatchQueue.global(qos: .utility).async {
             do {
                 let result = try installer.install()
-                Self.refreshClaudeUsage(bridgePath: result.bridgePath)
                 let message = result.changedSettings ? "Claude bridge installed" : "Claude bridge already installed"
                 Task { @MainActor [weak self] in
-                    self?.claudeUsageRefresher.start(bridgePath: result.bridgePath)
+                    self?.claudeUsageRefresher.start(bridgePath: result.bridgePath) { [weak self] result in
+                        Task { @MainActor in
+                            switch result {
+                            case .success: self?.claudeRefreshError = nil
+                            case .failure(.deferred): break
+                            case .failure(let error): self?.claudeRefreshError = error.localizedDescription
+                            }
+                        }
+                    }
                     self?.setupMessage = message
                 }
             } catch {
@@ -147,17 +164,29 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    nonisolated private static func refreshClaudeUsage(bridgePath: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["node", bridgePath, "--refresh-only"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            // The collector will continue to show the last cached Claude value, if any.
+    func refreshClaude() {
+        claudeUsageRefresher.refresh()
+    }
+
+    func refreshNow() {
+        guard !manualRefreshInFlight else { return }
+        manualRefreshInFlight = true
+        manualRefreshMessage = nil
+        refreshCodex()
+        claudeUsageRefresher.refreshManually { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.manualRefreshInFlight = false
+                switch result {
+                case .success:
+                    self.manualRefreshMessage = "Claude refreshed."
+                case .failure(.rateLimited):
+                    let retry = Date().addingTimeInterval(ClaudeBridgeRunner.refreshDelay(minimum: 0))
+                    self.manualRefreshMessage = "Claude is rate limited. Next retry: \(retry.formatted(date: .omitted, time: .shortened))."
+                case .failure(let error):
+                    self.manualRefreshMessage = "Claude: \(error.localizedDescription)."
+                }
+            }
         }
     }
 
@@ -189,36 +218,67 @@ final class UsageStore: ObservableObject {
 private final class ClaudeUsageRefresher: @unchecked Sendable {
     private let queue = DispatchQueue(label: "usage-monitor.claude-oauth-refresh", qos: .utility)
     private var timer: DispatchSourceTimer?
+    private var bridgePath: String?
+    private var onResult: (@Sendable (Result<Void, ClaudeRefreshError>) -> Void)?
+    private var nextAttempt = Date.distantPast
 
     deinit {
         timer?.cancel()
     }
 
-    func start(bridgePath: String) {
-        queue.async {
-            self.timer?.cancel()
-
-            let timer = DispatchSource.makeTimerSource(queue: self.queue)
-            timer.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(10))
-            timer.setEventHandler {
-                Self.refreshClaudeUsage(bridgePath: bridgePath)
-            }
-            self.timer = timer
-            timer.resume()
+    func start(bridgePath: String, onResult: @escaping @Sendable (Result<Void, ClaudeRefreshError>) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.bridgePath = bridgePath
+            self.onResult = onResult
+            self.refreshIfDue()
         }
     }
 
-    private static func refreshClaudeUsage(bridgePath: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["node", bridgePath, "--refresh-only"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            // The collector will continue to show the last cached Claude value, if any.
+    func refresh() {
+        queue.async { [weak self] in self?.refreshIfDue() }
+    }
+
+    func refreshManually(completion: @escaping @Sendable (Result<Void, ClaudeRefreshError>) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { completion(.failure(.launchFailed)); return }
+            completion(self.refreshIfDue(manual: true))
         }
+    }
+
+    func stop() {
+        queue.async { [weak self] in
+            self?.timer?.cancel()
+            self?.timer = nil
+            self?.bridgePath = nil
+            self?.onResult = nil
+        }
+    }
+
+    @discardableResult
+    private func refreshIfDue(manual: Bool = false) -> Result<Void, ClaudeRefreshError> {
+        guard let bridgePath else { return .failure(.launchFailed) }
+        let remaining = nextAttempt.timeIntervalSinceNow
+        guard manual || remaining <= 0 else {
+            schedule(after: remaining)
+            return .success(())
+        }
+        timer?.cancel()
+        let result = ClaudeBridgeRunner.refresh(bridgePath: bridgePath, manual: manual)
+        // The bridge owns backoff. A blocked manual click must not extend it again.
+        let scheduledDelay = ClaudeBridgeRunner.refreshDelay()
+        nextAttempt = Date().addingTimeInterval(scheduledDelay)
+        onResult?(result)
+        schedule(after: scheduledDelay)
+        return result
+    }
+
+    private func schedule(after delay: TimeInterval) {
+        timer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + max(1, delay), leeway: .seconds(5))
+        timer.setEventHandler { [weak self] in self?.refreshIfDue() }
+        self.timer = timer
+        timer.resume()
     }
 }

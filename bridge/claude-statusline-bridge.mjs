@@ -24,6 +24,95 @@ const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 5000;
+const POLL_INTERVAL_MS = 300_000;
+const CAUTIOUS_INTERVAL_MS = 900_000;
+const RATE_LIMIT_MEMORY_MS = 86_400_000;
+
+export function retryAfterMilliseconds(value, now = Date.now()) {
+  if (typeof value !== 'string' || !value.trim()) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : 0;
+}
+
+function refreshFailureCode(error) {
+  return error.status === 429 ? 3 : [400, 401, 403].includes(error.status) ? 2 : 5;
+}
+
+// Shared by manual launches and all widget instances. Never store credentials here.
+export async function scheduledRefresh(fetchUsage, root = usageMonitorRoot(), now = Date.now, manual = false) {
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const lock = path.join(root, 'claude-refresh.lock');
+  const owner = `${process.pid}-${crypto.randomUUID()}`;
+  try {
+    fs.mkdirSync(lock, { mode: 0o700 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    // Reclaim only a dead owner's lock, never an active request. Removing the
+    // unique owner file then an empty directory avoids deleting a replacement lock.
+    try {
+      const files = fs.readdirSync(lock);
+      if (files.length === 1 && /^\d+-[a-f0-9-]+$/.test(files[0])) {
+        const pid = Number(files[0].split('-')[0]);
+        try { process.kill(pid, 0); } catch (failure) {
+          if (failure.code === 'ESRCH') fs.unlinkSync(path.join(lock, files[0]));
+        }
+      } else if (files.length || Date.now() - fs.statSync(lock).mtimeMs < 60_000) {
+        return { failureCode: manual ? 7 : 0, snapshot: null };
+      }
+      fs.rmdirSync(lock);
+    } catch { /* Active owner or another process already recovered the lock. */ }
+    return { failureCode: manual ? 7 : 0, snapshot: null };
+  }
+  fs.writeFileSync(path.join(lock, owner), '', { flag: 'wx', mode: 0o600 });
+  const stateFile = path.join(root, 'claude-refresh-state.json');
+  try {
+    let previous = {};
+    try { previous = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { /* First refresh. */ }
+    if (!previous || typeof previous !== 'object') previous = {};
+    // Upgrade an existing rate-limit cooldown without probing the endpoint again.
+    if (previous.failureCode === 3 && !Number.isFinite(previous.rateLimitedAt)) {
+      previous.rateLimitedAt = now();
+      previous.nextAllowedAt = Math.max(previous.nextAllowedAt || 0, now() + CAUTIOUS_INTERVAL_MS);
+      writeAtomicJSON(stateFile, previous);
+    }
+    const rateLimitedAt = Number.isFinite(previous.rateLimitedAt) ? previous.rateLimitedAt : null;
+    const interval = rateLimitedAt !== null && now() - rateLimitedAt < RATE_LIMIT_MEMORY_MS
+      ? CAUTIOUS_INTERVAL_MS : POLL_INTERVAL_MS;
+    const lastAttemptAt = Number.isFinite(previous.lastAttemptAt) ? previous.lastAttemptAt : previous.nextAllowedAt - interval;
+    if (Number.isFinite(previous.nextAllowedAt) && previous.nextAllowedAt > now() &&
+        (!manual || previous.failureCode !== 0 || now() - lastAttemptAt < 60_000)) {
+      return { failureCode: [2, 3, 5, 6].includes(previous.failureCode) ? previous.failureCode : manual ? 7 : 0, snapshot: null };
+    }
+    const failures = Number.isInteger(previous.failures) ? Math.min(6, Math.max(0, previous.failures)) : 0;
+    // Reserve the interval before starting, so a killed process cannot cause a burst.
+    const attemptStartedAt = now();
+    writeAtomicJSON(stateFile, { nextAllowedAt: now() + interval, failures, failureCode: 5, rateLimitedAt, lastAttemptAt: attemptStartedAt });
+    try {
+      const snapshot = snapshotFromOAuthUsage(await fetchUsage());
+      if (!snapshotHasUsage(snapshot)) throw new Error('Claude usage response has no quotas');
+      writeAtomicJSON(path.join(root, 'claude-status.json'), snapshot);
+      writeAtomicJSON(stateFile, { nextAllowedAt: now() + interval, failures: 0, failureCode: 0, rateLimitedAt, lastAttemptAt: attemptStartedAt });
+      return { failureCode: 0, snapshot };
+    } catch (error) {
+      const failureCode = ['EACCES', 'EPERM', 'ENOSPC', 'EROFS'].includes(error.code) ? 6 : refreshFailureCode(error);
+      const base = failureCode === 3 ? CAUTIOUS_INTERVAL_MS : interval;
+      const backoff = Math.min(3_600_000, base * 2 ** failures);
+      writeAtomicJSON(stateFile, {
+        nextAllowedAt: now() + Math.max(backoff, error.retryAfterMs || 0),
+        failures: failures + 1, failureCode,
+        rateLimitedAt: failureCode === 3 ? now() : rateLimitedAt,
+        lastAttemptAt: attemptStartedAt
+      });
+      debugError('claude-refresh', error);
+      return { failureCode, snapshot: null };
+    }
+  } finally {
+    fs.unlinkSync(path.join(lock, owner));
+    fs.rmdirSync(lock);
+  }
+}
 
 function parseInput(input) {
   try {
@@ -121,8 +210,7 @@ function snapshotHasUsage(snapshot) {
   return Boolean(
     snapshot?.fiveHour?.remainingPercent !== null && snapshot?.fiveHour?.remainingPercent !== undefined ||
     snapshot?.sevenDay?.remainingPercent !== null && snapshot?.sevenDay?.remainingPercent !== undefined ||
-    snapshot?.fableWeekly?.remainingPercent !== null && snapshot?.fableWeekly?.remainingPercent !== undefined ||
-    snapshot?.context?.tokens !== null && snapshot?.context?.tokens !== undefined
+    snapshot?.fableWeekly?.remainingPercent !== null && snapshot?.fableWeekly?.remainingPercent !== undefined
   );
 }
 
@@ -241,6 +329,7 @@ async function requestJSON(url, options) {
       const error = new Error(`HTTP ${response.status}`);
       error.status = response.status;
       error.body = body;
+      error.retryAfterMs = retryAfterMilliseconds(response.headers?.get('retry-after'));
       throw error;
     }
     return body;
@@ -253,7 +342,7 @@ async function refreshOAuthToken(credentialsRecord) {
   const credentials = credentialsRecord.value;
   const oauth = credentials.claudeAiOauth;
   if (!oauth?.refreshToken) {
-    throw new Error('No Claude refresh token available');
+    throw authenticationError();
   }
 
   const body = {
@@ -288,15 +377,26 @@ async function refreshOAuthToken(credentialsRecord) {
 }
 
 async function freshAccessToken(forceRefresh = false) {
-  const credentialsRecord = readCredentials();
+  let credentialsRecord;
+  try {
+    credentialsRecord = readCredentials();
+  } catch {
+    throw authenticationError();
+  }
   const oauth = credentialsRecord.value.claudeAiOauth;
   if (!oauth?.accessToken && !oauth?.refreshToken) {
-    throw new Error('Claude OAuth credentials are unavailable');
+    throw authenticationError();
   }
   if (!forceRefresh && oauth.accessToken && !tokenExpiresSoon(oauth.expiresAt)) {
     return oauth.accessToken;
   }
   return await refreshOAuthToken(credentialsRecord);
+}
+
+function authenticationError() {
+  const error = new Error('Claude authentication is unavailable; sign in to Claude Code');
+  error.status = 401;
+  return error;
 }
 
 async function fetchClaudeUsageWithToken(accessToken) {
@@ -419,27 +519,28 @@ async function main() {
   const input = parseInput(rawInput);
   let snapshot = refreshOnly ? null : snapshotFromStatusLine(input);
   const usesStatusLine = snapshotHasUsage(snapshot);
+  let failureCode = 0;
 
-  if (!snapshotHasUsage(snapshot)) {
-    try {
-      snapshot = snapshotFromOAuthUsage(await fetchClaudeUsage());
-    } catch (error) {
-      debugError('claude-refresh', error);
-      // Status-line commands must stay quiet on refresh failures.
-    }
+  if (refreshOnly) {
+    const result = await scheduledRefresh(fetchClaudeUsage, usageMonitorRoot(), Date.now, args.has('--manual'));
+    snapshot = result.snapshot;
+    failureCode = result.failureCode;
   }
 
-  if (snapshotHasUsage(snapshot)) {
+  // Status-line callbacks are passive: no API requests on every terminal update.
+  if (usesStatusLine) {
     try {
       if (usesStatusLine) snapshot = preserveCachedFable(snapshot);
       writeSnapshot(snapshot);
     } catch (error) {
       debugError('snapshot-write', error);
+      failureCode = 6;
       // Status-line commands must stay quiet on write failures.
     }
   }
 
   if (refreshOnly) {
+    process.exitCode = failureCode;
     if (printSummary && snapshotHasUsage(snapshot)) {
       process.stdout.write(`${summary(snapshot)}\n`);
     }
@@ -453,6 +554,7 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main().catch((error) => {
     debugError('bridge-main', error);
+    if (refreshOnly) process.exitCode = 5;
     if (!refreshOnly) process.stdout.write('');
   });
 }
