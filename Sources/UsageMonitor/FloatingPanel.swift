@@ -4,6 +4,7 @@ import SwiftUI
 extension Notification.Name {
     static let usageMonitorWeeklyVisibilityChanged = Notification.Name("usageMonitorWeeklyVisibilityChanged")
     static let usageMonitorCollapsedChanged = Notification.Name("usageMonitorCollapsedChanged")
+    static let usageMonitorCollapsedWidthChanged = Notification.Name("usageMonitorCollapsedWidthChanged")
     static let usageMonitorSnoozeRequested = Notification.Name("usageMonitorSnoozeRequested")
 }
 
@@ -13,7 +14,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let defaultsKey = "floatingPanelFrame"
     private let collapsedDefaultsKey = "usageWidgetCollapsed"
     private let snoozeUntilDefaultsKey = "usageWidgetSnoozeUntil"
-    private let collapsedSize = NSSize(width: 208, height: 42)
+    private var collapsedSize = NSSize(width: 208, height: 42)
     private let compactSize = NSSize(width: 220, height: 112)
     private let weeklySize = NSSize(width: 220, height: 186)
     private let cornerRadius: CGFloat = 12
@@ -24,6 +25,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
 
     init(contentView: WidgetView) {
         isCollapsed = UserDefaults.standard.bool(forKey: collapsedDefaultsKey)
+        collapsedSize.width = contentView.collapsedWidth
         let initialSize = isCollapsed ? collapsedSize : compactSize
         let defaultFrame = NSRect(x: 80, y: 620, width: initialSize.width, height: initialSize.height)
         window = NSPanel(
@@ -77,14 +79,25 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(collapsedWidthChanged(_:)),
+            name: .usageMonitorCollapsedWidthChanged,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(snoozeRequested),
             name: .usageMonitorSnoozeRequested,
             object: nil
         )
     }
 
-    func show() {
-        if scheduleActiveSnoozeIfNeeded() {
+    func show(userInitiated: Bool = false) {
+        if userInitiated {
+            snoozeTimer?.invalidate()
+            snoozeTimer = nil
+            UserDefaults.standard.removeObject(forKey: snoozeUntilDefaultsKey)
+            NSApp.unhide(nil)
+        } else if scheduleActiveSnoozeIfNeeded() {
             return
         }
         window.orderFrontRegardless()
@@ -107,6 +120,13 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         setPanelSize(sizeForCurrentState())
     }
 
+    @objc private func collapsedWidthChanged(_ notification: Notification) {
+        guard let width = notification.userInfo?["width"] as? CGFloat,
+              width != collapsedSize.width else { return }
+        collapsedSize.width = width
+        if isCollapsed { setPanelSize(collapsedSize) }
+    }
+
     @objc private func snoozeRequested() {
         let until = Date().addingTimeInterval(snoozeDuration)
         UserDefaults.standard.set(until.timeIntervalSince1970, forKey: snoozeUntilDefaultsKey)
@@ -123,8 +143,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
 
     private func setPanelSize(_ size: NSSize) {
         let frame = window.frame
+        let screen = window.screen?.visibleFrame
+        let x = screen.map { max($0.minX, min(frame.minX, $0.maxX - size.width)) } ?? frame.minX
         let resizedFrame = NSRect(
-            x: frame.minX,
+            x: x,
             y: frame.maxY - size.height,
             width: size.width,
             height: size.height

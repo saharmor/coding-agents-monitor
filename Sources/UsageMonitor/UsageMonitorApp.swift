@@ -47,7 +47,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let panel = FloatingPanelController(contentView: WidgetView(store: store))
         self.panel = panel
-        panel.show()
+        panel.show(userInitiated: CommandLine.arguments.contains("--show"))
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Launch Services reuses the running process when the launcher is run again.
+        panel?.show(userInitiated: true)
+        store.refreshCodex()
+        store.refreshClaude()
+        return false
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

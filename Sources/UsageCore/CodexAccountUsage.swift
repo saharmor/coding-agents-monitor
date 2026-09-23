@@ -29,6 +29,17 @@ public enum CodexAccountParser {
 public enum UsageFreshness {
     public static let maximumAge: TimeInterval = 120
 
+    // Claude's endpoint cannot sustain frequent polling. Retain a labeled last-known
+    // reading for at most 30 minutes, but never carry usage across a known reset.
+    public static func canDisplay(window: LimitWindow?, updatedAt: Date?, now: Date,
+                                  provider: UsageProvider) -> Bool {
+        // A response may arrive between the view's 30-second clock ticks.
+        guard window != nil, let updatedAt, updatedAt <= now.addingTimeInterval(60),
+              now.timeIntervalSince(updatedAt) < (provider == .claude ? 1800 : maximumAge)
+        else { return false }
+        return window?.resetsAt.map { $0 > now } ?? true
+    }
+
     public static func needsUpdate(window: LimitWindow?, updatedAt: Date?, now: Date) -> Bool {
         guard let updatedAt else { return true }
         if now.timeIntervalSince(updatedAt) >= maximumAge { return true }

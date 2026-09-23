@@ -7,9 +7,25 @@ struct WidgetView: View {
     @ObservedObject var store: UsageStore
     @AppStorage("usageWidgetCollapsed") private var isCollapsed = false
     @State private var showsWeekly = false
+    @State private var showsRefreshResult = false
     @State private var now = Date()
 
     private let clockTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    var collapsedWidth: CGFloat {
+        let warnings = [store.claude, store.codex].compactMap {
+            CompactUsage.weeklyWarning(for: $0, now: now)
+        }.count
+        let paceLabels = [store.claude, store.codex].compactMap { $0 }.reduce(0) { count, snapshot in
+            let primary = snapshot.fiveHour == nil ? snapshot.sevenDay : nil
+            let primaryHasPace = UsageFreshness.canDisplay(window: primary, updatedAt: snapshot.updatedAt, now: now, provider: snapshot.provider) &&
+                WeeklyPace.calculate(window: primary, now: now) != nil
+            let fableHasPace = snapshot.provider == .claude && UsageFreshness.canDisplay(window: snapshot.fableWeekly, updatedAt: snapshot.fableWeeklyUpdatedAt, now: now, provider: snapshot.provider) &&
+                WeeklyPace.calculate(window: snapshot.fableWeekly, now: now) != nil
+            return count + (primaryHasPace ? 1 : 0) + (fableHasPace ? 1 : 0)
+        }
+        return 220 + CGFloat(warnings) * 80 + CGFloat(paceLabels) * 36
+    }
 
     var body: some View {
         Group {
@@ -20,10 +36,18 @@ struct WidgetView: View {
             }
         }
         .padding(isCollapsed ? 7 : 10)
-        .frame(width: isCollapsed ? 208 : 220)
+        .frame(width: isCollapsed ? collapsedWidth : 220)
         .fixedSize(horizontal: false, vertical: true)
+        .onChange(of: collapsedWidth) { width in
+            NotificationCenter.default.post(
+                name: .usageMonitorCollapsedWidthChanged,
+                object: nil,
+                userInfo: ["width": width]
+            )
+        }
         .onChange(of: isCollapsed) { value in
             store.refreshCodex()
+            store.refreshClaude()
             NotificationCenter.default.post(
                 name: .usageMonitorCollapsedChanged,
                 object: nil,
@@ -54,7 +78,7 @@ struct WidgetView: View {
 
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+            HStack(spacing: 4) {
                 Text("Usage")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
 
@@ -66,6 +90,42 @@ struct WidgetView: View {
                 }
 
                 Spacer()
+
+                Button {
+                    showsRefreshResult = false
+                    store.refreshNow()
+                } label: {
+                    Group {
+                        if store.manualRefreshInFlight {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                    }
+                    .frame(width: 24, height: 22)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(store.manualRefreshInFlight)
+                .accessibilityLabel("Refresh usage")
+                .help("Refresh usage now. Claude server cooldowns still apply; checks are at least one minute apart.")
+                .popover(isPresented: $showsRefreshResult) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(store.manualRefreshMessage ?? "Refreshing...")
+                        Text(store.codexRefreshError.map { "Codex: \($0)" } ??
+                             (store.codexRefreshInFlight ? "Codex refreshing..." :
+                              "Codex last checked: \(store.codex?.updatedAt.formatted(date: .omitted, time: .standard) ?? "waiting")"))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 11))
+                    .padding(12)
+                    .frame(width: 240, alignment: .leading)
+                }
+                .onChange(of: store.manualRefreshMessage) { message in
+                    showsRefreshResult = message != nil
+                }
 
                 Button {
                     NotificationCenter.default.post(name: .usageMonitorSnoozeRequested, object: nil)
@@ -117,7 +177,8 @@ struct WidgetView: View {
                 .foregroundStyle(.secondary)
             }
 
-            ProviderView(provider: .claude, snapshot: store.claude, showsWeekly: showsWeekly, now: now)
+            ProviderView(provider: .claude, snapshot: store.claude, showsWeekly: showsWeekly, now: now,
+                         refreshError: store.claudeRefreshError)
             ProviderView(provider: .codex, snapshot: store.codex, showsWeekly: showsWeekly, now: now,
                          refreshError: store.codexRefreshError)
         }
@@ -146,7 +207,7 @@ struct WidgetView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .buttonStyle(.plain)
-        .help("Expand usage. Claude parentheses show Fable weekly usage.")
+        .help("Expand usage. ~ means cached, not live. Parentheses: Fable weekly. Weekly colors compare usage with elapsed time; signed values are percentage points above (+) or below (-) pace.")
     }
 }
 
@@ -166,11 +227,14 @@ private struct ProviderView: View {
                     .help(refreshError ?? "\(provider.displayName). Last checked: \(snapshot?.updatedAt.formatted(date: .omitted, time: .standard) ?? "waiting")")
 
                 UsageMeter(
+                    provider: provider,
                     label: primaryLabel,
+                    isWeekly: usesWeeklyFallback,
                     window: primaryWindow,
                     snapshotUpdatedAt: snapshot?.updatedAt,
                     emptyText: statusText(for: primaryWindow),
-                    now: now
+                    now: now,
+                    refreshError: refreshError
                 )
             }
 
@@ -180,11 +244,14 @@ private struct ProviderView: View {
                         .frame(width: 16, height: 16)
 
                     UsageMeter(
+                        provider: provider,
                         label: "7d",
+                        isWeekly: true,
                         window: snapshot?.sevenDay,
                         snapshotUpdatedAt: snapshot?.updatedAt,
                         emptyText: statusText(for: snapshot?.sevenDay),
-                        now: now
+                        now: now,
+                        refreshError: refreshError
                     )
                 }
             }
@@ -193,11 +260,14 @@ private struct ProviderView: View {
                 HStack(spacing: 7) {
                     Color.clear.frame(width: 16, height: 16)
                     UsageMeter(
+                        provider: provider,
                         label: "Fable",
+                        isWeekly: true,
                         window: snapshot?.fableWeekly,
                         snapshotUpdatedAt: snapshot?.fableWeeklyUpdatedAt,
                         emptyText: "not reported",
-                        now: now
+                        now: now,
+                        refreshError: refreshError
                     )
                     .help("Fable weekly usage")
                 }
@@ -324,11 +394,13 @@ private struct CollapsedProviderView: View {
                 Text(usedText)
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(textColor)
+                    .help(primaryPace?.help ?? "Five-hour usage")
 
                 if provider == .claude, snapshot?.fableWeekly != nil {
                     Text(fableText)
                         .font(.system(size: 8, weight: .semibold, design: .rounded))
                         .foregroundStyle(fableColor)
+                        .help(fablePace?.help ?? "Fable weekly pace unavailable")
                 }
             }
             .monospacedDigit()
@@ -344,6 +416,17 @@ private struct CollapsedProviderView: View {
                     .minimumScaleFactor(0.8)
                     .frame(width: 20, alignment: .leading)
             }
+
+            if let weeklyWarning {
+                Text("\(cachedPrefix(window: weeklyWarning, updatedAt: snapshot?.updatedAt))7d \(Int(round(weeklyWarning.usedPercent)))%\(WeeklyPace.calculate(window: weeklyWarning, now: now)?.suffix ?? "")")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(WeeklyPace.calculate(window: weeklyWarning, now: now)?.color ?? .secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: 76, alignment: .leading)
+                    .help(WeeklyPace.calculate(window: weeklyWarning, now: now)?.help ?? "Weekly pace unavailable without a valid reset time.")
+            }
         }
         .fixedSize(horizontal: true, vertical: false)
         .help("\(provider.displayName) \(usesWeeklyFallback ? "7-day" : "5-hour") usage.\(provider == .claude ? " Parentheses: Fable weekly usage." : "") Last checked: \(snapshot?.updatedAt.formatted(date: .omitted, time: .standard) ?? "waiting")")
@@ -353,25 +436,41 @@ private struct CollapsedProviderView: View {
         guard let used = displayedUsedPercent else {
             return "--"
         }
-        return "\(Int(round(used)))%"
+        return "\(cachedPrefix(window: primaryWindow, updatedAt: snapshot?.updatedAt))\(Int(round(used)))%\(primaryPace?.suffix ?? "")"
+    }
+
+    private var primaryPace: WeeklyPace? {
+        guard usesWeeklyFallback, displayedUsedPercent != nil else { return nil }
+        return WeeklyPace.calculate(window: primaryWindow, now: now)
+    }
+
+    private var fablePace: WeeklyPace? {
+        guard displayedFablePercent != nil else { return nil }
+        return WeeklyPace.calculate(window: snapshot?.fableWeekly, now: now)
+    }
+
+    private func cachedPrefix(window: LimitWindow?, updatedAt: Date?) -> String {
+        UsageFreshness.needsUpdate(window: window, updatedAt: updatedAt, now: now) ? "~" : ""
+    }
+
+    private var weeklyWarning: LimitWindow? {
+        CompactUsage.weeklyWarning(for: snapshot, now: now)
     }
 
     private var displayedFablePercent: Double? {
         guard let window = snapshot?.fableWeekly,
-              !UsageFreshness.needsUpdate(window: window,
-                                          updatedAt: snapshot?.fableWeeklyUpdatedAt, now: now)
+              UsageFreshness.canDisplay(window: window,
+                                         updatedAt: snapshot?.fableWeeklyUpdatedAt, now: now, provider: provider)
         else { return nil }
         return window.usedPercent
     }
 
     private var fableText: String {
-        displayedFablePercent.map { "(\(Int(round($0)))%)" } ?? "(--)"
+        displayedFablePercent.map { "(\(cachedPrefix(window: snapshot?.fableWeekly, updatedAt: snapshot?.fableWeeklyUpdatedAt))\(Int(round($0)))%\(fablePace.map { " \($0.differenceText)" } ?? ""))" } ?? "(--)"
     }
 
     private var fableColor: Color {
-        guard let used = displayedFablePercent else { return .secondary }
-        if used >= 90 { return .red }
-        return used >= 70 ? .orange : .secondary
+        fablePace?.color ?? .secondary
     }
 
     private var displayedUsedPercent: Double? {
@@ -404,7 +503,7 @@ private struct CollapsedProviderView: View {
     }
 
     private func needsFreshSample(window: LimitWindow) -> Bool {
-        UsageFreshness.needsUpdate(window: window, updatedAt: snapshot?.updatedAt, now: now)
+        !UsageFreshness.canDisplay(window: window, updatedAt: snapshot?.updatedAt, now: now, provider: provider)
     }
 
     private var primaryWindow: LimitWindow? {
@@ -416,32 +515,33 @@ private struct CollapsedProviderView: View {
     }
 
     private var textColor: Color {
+        if usesWeeklyFallback { return primaryPace?.color ?? .secondary }
         guard let used = displayedUsedPercent else {
             return .secondary
         }
-        return used >= 70 ? statusColor : .primary
+        return used >= 90 ? .red : used >= 70 ? .orange : .primary
     }
 
     private var statusColor: Color {
-        guard let used = displayedUsedPercent else {
-            return .gray
+        var levels = [primaryPace, fablePace, WeeklyPace.calculate(window: weeklyWarning, now: now)]
+            .compactMap { $0?.status.rawValue }
+        if !usesWeeklyFallback, let used = displayedUsedPercent {
+            levels.append(used >= 90 ? 2 : used >= 70 ? 1 : 0)
         }
-        if used >= 90 {
-            return .red
-        }
-        if used >= 70 {
-            return .orange
-        }
-        return .green
+        guard let level = levels.max() else { return .gray }
+        return level == 2 ? .red : level == 1 ? .orange : .green
     }
 }
 
 private struct UsageMeter: View {
+    var provider: UsageProvider
     var label: String
+    var isWeekly: Bool
     var window: LimitWindow?
     var snapshotUpdatedAt: Date?
     var emptyText: String
     var now: Date
+    var refreshError: String? = nil
 
     var body: some View {
         VStack(spacing: 2) {
@@ -459,14 +559,28 @@ private struct UsageMeter: View {
                     }
                 }
                 .frame(height: 6)
-                Text(usedText)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .frame(width: 34, alignment: .trailing)
+                HStack(spacing: 3) {
+                    Text(usedText)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    if let difference = pace?.differenceText {
+                        Text("(\(difference))")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    }
+                }
+                    .foregroundStyle(isWeekly ? (pace?.color ?? .secondary) : .primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: isWeekly ? 80 : 40, alignment: .trailing)
+                    .help(pace?.help ?? (isWeekly ? "Weekly pace unavailable without a valid reset time." : "Five-hour usage"))
             }
             HStack {
                 Text(resetText)
                     .font(.system(size: 8, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .help(resetHelp)
                 Spacer()
             }
         }
@@ -476,7 +590,12 @@ private struct UsageMeter: View {
         guard let used = window?.usedPercent else {
             return nil
         }
-        return needsFreshSample ? nil : used
+        return UsageFreshness.canDisplay(window: window, updatedAt: snapshotUpdatedAt, now: now, provider: provider) ? used : nil
+    }
+
+    private var pace: WeeklyPace? {
+        guard isWeekly, displayedUsedPercent != nil else { return nil }
+        return WeeklyPace.calculate(window: window, now: now)
     }
 
     private var needsFreshSample: Bool {
@@ -487,15 +606,18 @@ private struct UsageMeter: View {
         guard let used = displayedUsedPercent else {
             return "--"
         }
-        return "\(Int(round(used)))%"
+        return "\(needsFreshSample ? "~" : "")\(Int(round(used)))%"
     }
 
     private var resetText: String {
-        if window == nil {
-            return emptyText
+        if let date = window?.resetsAt, date > now {
+            return ResetFormatter.shared.string(from: date, now: now)
         }
-        if needsFreshSample {
-            return "stale - refreshing"
+        if window == nil {
+            return refreshError ?? emptyText
+        }
+        if needsFreshSample && displayedUsedPercent == nil {
+            return refreshError ?? "stale - refreshing"
         }
         guard let date = window?.resetsAt else {
             if let used = displayedUsedPercent, used <= 0.5 {
@@ -506,7 +628,22 @@ private struct UsageMeter: View {
         return ResetFormatter.shared.string(from: date, now: now)
     }
 
+    private var resetHelp: String {
+        var details: [String] = []
+        if let snapshotUpdatedAt {
+            let minutes = max(0, Int(now.timeIntervalSince(snapshotUpdatedAt) / 60))
+            let age = minutes == 0 ? "just now" : "\(minutes)m ago"
+            details.append("Last checked \(age) (\(snapshotUpdatedAt.formatted(date: .omitted, time: .standard))).")
+            if needsFreshSample { details.append("Cached reading; waiting for fresh usage.") }
+        } else {
+            details.append("No usage reading received yet.")
+        }
+        if let refreshError { details.append(refreshError) }
+        return details.joined(separator: " ")
+    }
+
     private var color: Color {
+        if isWeekly { return pace?.color ?? .gray }
         guard let used = displayedUsedPercent else {
             return .gray
         }
@@ -517,6 +654,16 @@ private struct UsageMeter: View {
             return .orange
         }
         return .green
+    }
+}
+
+private extension WeeklyPace {
+    var color: Color {
+        switch status {
+        case .onTrack: return .green
+        case .ahead: return .orange
+        case .over: return .red
+        }
     }
 }
 
